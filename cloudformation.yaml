@@ -1,0 +1,258 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Architectural Studio ERP - Lambda + DynamoDB + API Gateway
+
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+  LambdaMemory:
+    Type: Number
+    Default: 256
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+
+Resources:
+
+  # ─── DynamoDB Tables ───
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: username-index
+          KeySchema:
+            - AttributeName: username
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  EmployeesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_employees
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_projects
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  TimeLogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_timelogs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: employee_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: employee-index
+          KeySchema:
+            - AttributeName: employee_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: project-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  InvoicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_invoices
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  QuotationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_quotations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  SettingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_settings
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  CountersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_counters
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  # ─── IAM Role ───
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: erp-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt UsersTable.Arn
+                  - !Sub "${UsersTable.Arn}/index/*"
+                  - !GetAtt EmployeesTable.Arn
+                  - !GetAtt ProjectsTable.Arn
+                  - !GetAtt TimeLogsTable.Arn
+                  - !Sub "${TimeLogsTable.Arn}/index/*"
+                  - !GetAtt InvoicesTable.Arn
+                  - !GetAtt QuotationsTable.Arn
+                  - !GetAtt SettingsTable.Arn
+                  - !GetAtt CountersTable.Arn
+
+  # ─── Lambda Function ───
+
+  ErpLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: erp-api
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: !Ref LambdaMemory
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          AWS_REGION_NAME: !Ref AWS::Region
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code via `aws lambda update-function-code`
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Deploy actual code"}
+
+  # ─── API Gateway (HTTP API) ───
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: erp-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ErpLambdaFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "$default"
+      Target: !Sub "integrations/${LambdaIntegration}"
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: !Ref StageName
+      AutoDeploy: true
+
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ErpLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  LambdaFunctionName:
+    Value: !Ref ErpLambdaFunction
+  LambdaFunctionArn:
+    Value: !GetAtt ErpLambdaFunction.Arn

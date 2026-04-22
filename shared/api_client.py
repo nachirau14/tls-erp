@@ -1,0 +1,124 @@
+"""
+api_client.py – HTTP wrapper for both Streamlit apps.
+Calls the Lambda backend via API Gateway.
+"""
+
+import requests
+import streamlit as st
+
+def get_base_url():
+    """Read API base URL from Streamlit secrets."""
+    try:
+        return st.secrets["API_BASE_URL"].rstrip("/")
+    except Exception:
+        import os
+        return os.environ.get("API_BASE_URL", "http://localhost:8080").rstrip("/")
+
+def _get(path, params=None):
+    r = requests.get(f"{get_base_url()}{path}", params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def _post(path, data):
+    r = requests.post(f"{get_base_url()}{path}", json=data, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def _put(path, data):
+    r = requests.put(f"{get_base_url()}{path}", json=data, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def _delete(path):
+    r = requests.delete(f"{get_base_url()}{path}", timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+# ─── Auth ───
+def login(username, password):
+    return _post("/auth/login", {"username": username, "password": password})
+
+def register_user(username, password, role, display_name="", employee_id=""):
+    return _post("/auth/register", {
+        "username": username, "password": password, "role": role,
+        "display_name": display_name, "employee_id": employee_id,
+    })
+
+def list_users():
+    return _get("/auth/users")
+
+# ─── Employees ───
+def list_employees():
+    return _get("/employees")
+
+def create_employee(name, role, salary):
+    return _post("/employees", {"name": name, "role": role, "salary": salary})
+
+def delete_employee(emp_id):
+    return _delete(f"/employees/{emp_id}")
+
+# ─── Projects ───
+def list_projects():
+    return _get("/projects")
+
+def create_project(name, client_name, total_cost, start_date, description=""):
+    return _post("/projects", {
+        "name": name, "client_name": client_name,
+        "total_cost": total_cost, "start_date": start_date,
+        "description": description,
+    })
+
+def update_project(proj_id, data):
+    return _put(f"/projects/{proj_id}", data)
+
+def delete_project(proj_id):
+    return _delete(f"/projects/{proj_id}")
+
+# ─── Time Logs ───
+def list_time_logs(employee_id=None, project_id=None):
+    params = {}
+    if employee_id: params["employee_id"] = employee_id
+    if project_id:  params["project_id"] = project_id
+    return _get("/timelogs", params=params)
+
+def create_time_log(employee_id, project_id, hours, date, comments=""):
+    return _post("/timelogs", {
+        "employee_id": employee_id, "project_id": project_id,
+        "hours": hours, "date": date, "comments": comments,
+    })
+
+def delete_time_log(log_id):
+    return _delete(f"/timelogs/{log_id}")
+
+# ─── Invoices ───
+def list_invoices(quarter=None, fy=None):
+    params = {}
+    if quarter: params["quarter"] = quarter
+    if fy:      params["fy"] = fy
+    return _get("/invoices", params=params)
+
+def create_invoice(client_name, amount, date, description="", invoice_type="tax", project_id=""):
+    return _post("/invoices", {
+        "client_name": client_name, "amount": amount, "date": date,
+        "description": description, "invoice_type": invoice_type, "project_id": project_id,
+    })
+
+def update_invoice(inv_id, data):
+    return _put(f"/invoices/{inv_id}", data)
+
+# ─── Quotations ───
+def list_quotations():
+    return _get("/quotations")
+
+def create_quotation(data):
+    return _post("/quotations", data)
+
+def update_quotation(qtn_id, data):
+    return _put(f"/quotations/{qtn_id}", data)
+
+# ─── Bank Details ───
+def get_bank_details():
+    return _get("/bank-details")
+
+def update_bank_details(data):
+    return _put("/bank-details", data)
