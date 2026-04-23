@@ -1,6 +1,5 @@
 """
 AWS Lambda – REST API for Architectural Studio ERP.
-
 Deployed behind API Gateway HTTP API (v2 payload format).
 Uses DynamoDB for all storage.
 """
@@ -10,23 +9,28 @@ import hashlib
 import uuid
 import os
 import re
+import logging
 from datetime import datetime
 from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
 
-# ─── DynamoDB setup ───
-dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION_NAME", "ap-south-1"))
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-TABLE_USERS       = dynamodb.Table("erp_users")
-TABLE_EMPLOYEES   = dynamodb.Table("erp_employees")
-TABLE_PROJECTS    = dynamodb.Table("erp_projects")
-TABLE_TIMELOGS    = dynamodb.Table("erp_timelogs")
-TABLE_INVOICES    = dynamodb.Table("erp_invoices")
-TABLE_QUOTATIONS  = dynamodb.Table("erp_quotations")
-TABLE_SETTINGS    = dynamodb.Table("erp_settings")
-TABLE_COUNTERS    = dynamodb.Table("erp_counters")
+# ─── DynamoDB setup ───
+REGION = os.environ.get("AWS_REGION_NAME", "ap-south-1")
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+
+TABLE_USERS      = dynamodb.Table("erp_users")
+TABLE_EMPLOYEES  = dynamodb.Table("erp_employees")
+TABLE_PROJECTS   = dynamodb.Table("erp_projects")
+TABLE_TIMELOGS   = dynamodb.Table("erp_timelogs")
+TABLE_INVOICES   = dynamodb.Table("erp_invoices")
+TABLE_QUOTATIONS = dynamodb.Table("erp_quotations")
+TABLE_SETTINGS   = dynamodb.Table("erp_settings")
+TABLE_COUNTERS   = dynamodb.Table("erp_counters")
 
 GST_RATE = Decimal("0.18")
 TDS_RATE = Decimal("0.10")
@@ -35,6 +39,7 @@ PROJECT_STAGES = [
     "2D Plans", "End Views", "Elevations", "3D Modeling",
     "Rendering", "Presentation", "Site", "Checking",
 ]
+
 
 # ─── Helpers ───
 
@@ -48,16 +53,20 @@ def _hash(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
 def _dec(val):
-    """Convert to Decimal for DynamoDB."""
+    """Convert to Decimal for DynamoDB (it rejects float)."""
     if isinstance(val, float):
+        return Decimal(str(val))
+    if isinstance(val, int):
         return Decimal(str(val))
     return val
 
 def _json_serial(obj):
-    """Handle Decimal serialization."""
+    """Handle Decimal → float for JSON serialization."""
     if isinstance(obj, Decimal):
         f = float(obj)
         return int(f) if f == int(f) else f
+    if isinstance(obj, bool):
+        return obj
     raise TypeError(f"Type {type(obj)} not serializable")
 
 def _resp(body, status=200):
@@ -76,13 +85,14 @@ def _err(msg, status=400):
     return _resp({"error": msg}, status)
 
 def _body(event):
+    """Parse JSON body from API Gateway v2 event."""
     raw = event.get("body", "") or ""
     if event.get("isBase64Encoded"):
         import base64
         raw = base64.b64decode(raw).decode()
     try:
         return json.loads(raw) if raw else {}
-    except:
+    except Exception:
         return {}
 
 def _qs(event):
@@ -95,18 +105,18 @@ def _require(data, fields):
     return None
 
 def _get_next_number(prefix):
-    """Atomic counter via DynamoDB update expression."""
+    """Atomic counter via DynamoDB conditional update."""
     resp = TABLE_COUNTERS.update_item(
         Key={"pk": prefix},
         UpdateExpression="SET #v = if_not_exists(#v, :zero) + :one",
-        ExpressionAttributeNames={"#v": "value"},
+        ExpressionAttributeNames={"#v": "counter_value"},
         ExpressionAttributeValues={":zero": 0, ":one": 1},
         ReturnValues="UPDATED_NEW",
     )
-    return int(resp["Attributes"]["value"])
+    return int(resp["Attributes"]["counter_value"])
 
 def _scan_all(table):
-    """Full table scan (fine for <1000 items)."""
+    """Full table scan with pagination."""
     items = []
     resp = table.scan()
     items.extend(resp.get("Items", []))
@@ -116,42 +126,62 @@ def _scan_all(table):
     return items
 
 
-# ─── Auth / Users ───
+# ─── Seed default admin (runs once on cold start) ───
 
 def _seed_admin():
-    resp = TABLE_USERS.query(
-        IndexName="username-index",
-        KeyConditionExpression=Key("username").eq("admin"),
-    )
-    if not resp.get("Items"):
-        TABLE_USERS.put_item(Item={
-            "pk": _uid(),
-            "username": "admin",
-            "password": _hash("admin123"),
-            "role": "admin",
-            "display_name": "Administrator",
-            "employee_id": "",
-            "created_at": _now(),
-        })
+    """Create default admin user if none exists."""
+    try:
+        resp = TABLE_USERS.query(
+            IndexName="username-index",
+            KeyConditionExpression=Key("username").eq("admin"),
+        )
+        if not resp.get("Items"):
+            TABLE_USERS.put_item(Item={
+                "pk": _uid(),
+                "username": "admin",
+                "password": _hash("admin123"),
+                "role": "admin",
+                "display_name": "Administrator",
+                "employee_id": "",
+                "created_at": _now(),
+            })
+            logger.info("Default admin user created.")
+        else:
+            logger.info("Admin user already exists.")
+    except Exception as e:
+        logger.error(f"Error seeding admin: {e}")
+
+# Seed on module load (cold start only)
+_seed_admin()
+
+
+# ─── Auth / Users ───
 
 def _login(data):
     err = _require(data, ["username", "password"])
     if err:
         return _err(err)
+
     resp = TABLE_USERS.query(
         IndexName="username-index",
         KeyConditionExpression=Key("username").eq(data["username"]),
     )
     users = resp.get("Items", [])
-    if not users or users[0]["password"] != _hash(data["password"]):
+    if not users:
         return _err("Invalid credentials", 401)
-    u = users[0]
+
+    user = users[0]
+    if user["password"] != _hash(data["password"]):
+        return _err("Invalid credentials", 401)
+
     return _resp({
         "message": "Login successful",
         "user": {
-            "id": u["pk"], "username": u["username"], "role": u["role"],
-            "display_name": u.get("display_name", u["username"]),
-            "employee_id": u.get("employee_id", ""),
+            "id": user["pk"],
+            "username": user["username"],
+            "role": user["role"],
+            "display_name": user.get("display_name", user["username"]),
+            "employee_id": user.get("employee_id", ""),
         }
     })
 
@@ -159,12 +189,14 @@ def _register(data):
     err = _require(data, ["username", "password", "role"])
     if err:
         return _err(err)
+
     resp = TABLE_USERS.query(
         IndexName="username-index",
         KeyConditionExpression=Key("username").eq(data["username"]),
     )
     if resp.get("Items"):
         return _err("Username already exists")
+
     TABLE_USERS.put_item(Item={
         "pk": _uid(),
         "username": data["username"],
@@ -196,12 +228,8 @@ def _create_employee(data):
     hourly = (daily / 8).quantize(Decimal("0.01"))
     pk = _uid()
     TABLE_EMPLOYEES.put_item(Item={
-        "pk": pk,
-        "name": data["name"],
-        "role": data.get("role", ""),
-        "salary": salary,
-        "daily_cost": daily,
-        "hourly_cost": hourly,
+        "pk": pk, "name": data["name"], "role": data.get("role", ""),
+        "salary": salary, "daily_cost": daily, "hourly_cost": hourly,
         "created_at": _now(),
     })
     return _resp({"message": "Employee created", "id": pk})
@@ -224,15 +252,13 @@ def _create_project(data):
     stages = {s: "Not Started" for s in PROJECT_STAGES}
     pk = _uid()
     TABLE_PROJECTS.put_item(Item={
-        "pk": pk,
-        "name": data["name"],
+        "pk": pk, "name": data["name"],
         "client_name": data.get("client_name", ""),
         "total_cost": _dec(float(data.get("total_cost", 0))),
         "start_date": data.get("start_date", _now()[:10]),
         "status": "active",
         "description": data.get("description", ""),
-        "stages": stages,
-        "created_at": _now(),
+        "stages": stages, "created_at": _now(),
     })
     return _resp({"message": "Project created", "id": pk})
 
@@ -331,15 +357,15 @@ def _create_invoice(data):
         "description": data.get("description", ""),
         "invoice_type": data.get("invoice_type", "tax"),
         "date": data["date"],
-        "basic_amount": amt,
-        "gst": gst, "tds": tds, "total": total, "receivable": receivable,
-        "received": False,
-        "received_date": "",
+        "basic_amount": amt, "gst": gst, "tds": tds,
+        "total": total, "receivable": receivable,
+        "received": False, "received_date": "",
         "quarter": quarter, "fy": fy,
         "project_id": data.get("project_id", ""),
         "created_at": _now(),
     })
-    return _resp({"message": "Invoice created", "id": pk, "invoice_number": f"INV-{str(inv_num).zfill(4)}"})
+    return _resp({"message": "Invoice created", "id": pk,
+                  "invoice_number": f"INV-{str(inv_num).zfill(4)}"})
 
 def _list_invoices(params):
     items = _scan_all(TABLE_INVOICES)
@@ -357,7 +383,7 @@ def _update_invoice(inv_id, data):
     if not item:
         return _err("Not found", 404)
     if "received" in data:
-        item["received"] = data["received"]
+        item["received"] = bool(data["received"])
         item["received_date"] = _now()[:10] if data["received"] else ""
     for f in ["client_name", "description", "invoice_type"]:
         if f in data:
@@ -413,7 +439,8 @@ def _update_quotation(qtn_id, data):
 # ─── Bank Details (singleton) ───
 
 def _get_bank_details():
-    item = TABLE_SETTINGS.get_item(Key={"pk": "bank_details"}).get("Item")
+    resp = TABLE_SETTINGS.get_item(Key={"pk": "bank_details"})
+    item = resp.get("Item")
     if item:
         return _resp({k: v for k, v in item.items() if k != "pk"})
     return _resp({
@@ -423,7 +450,8 @@ def _get_bank_details():
 
 def _update_bank_details(data):
     item = {"pk": "bank_details"}
-    for f in ["bank_name", "branch", "account_name", "account_number", "ifsc", "pan", "gstin"]:
+    for f in ["bank_name", "branch", "account_name",
+              "account_number", "ifsc", "pan", "gstin"]:
         item[f] = data.get(f, "")
     TABLE_SETTINGS.put_item(Item=item)
     return _resp({"message": "Saved"})
@@ -436,18 +464,17 @@ def _update_bank_details(data):
 def lambda_handler(event, context):
     """Entry point – API Gateway HTTP API v2 payload format."""
 
-    # Seed admin on cold start
-    _seed_admin()
-
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath", "/").rstrip("/")
 
-    # Strip stage prefix if present (e.g. /prod/health -> /health)
+    # Strip stage prefix (e.g. /prod/auth/login → /auth/login)
     stage = event.get("requestContext", {}).get("stage", "")
-    if stage and path.startswith(f"/{stage}"):
+    if stage and stage != "$default" and path.startswith(f"/{stage}"):
         path = path[len(f"/{stage}"):]
     if not path:
         path = "/"
+
+    logger.info(f"Request: {method} {path}")
 
     if method == "OPTIONS":
         return _resp({"status": "ok"})
@@ -466,7 +493,7 @@ def lambda_handler(event, context):
             return _list_employees()
         if path == "/employees" and method == "POST":
             return _create_employee(_body(event))
-        if re.match(r"^/employees/[\w-]+$", path) and method == "DELETE":
+        if re.match(r"^/employees/.+$", path) and method == "DELETE":
             return _delete_employee(path.split("/")[-1])
 
         # ── Projects ──
@@ -474,9 +501,9 @@ def lambda_handler(event, context):
             return _list_projects()
         if path == "/projects" and method == "POST":
             return _create_project(_body(event))
-        if re.match(r"^/projects/[\w-]+$", path) and method == "PUT":
+        if re.match(r"^/projects/.+$", path) and method == "PUT":
             return _update_project(path.split("/")[-1], _body(event))
-        if re.match(r"^/projects/[\w-]+$", path) and method == "DELETE":
+        if re.match(r"^/projects/.+$", path) and method == "DELETE":
             return _delete_project(path.split("/")[-1])
 
         # ── Time Logs ──
@@ -484,7 +511,7 @@ def lambda_handler(event, context):
             return _list_timelogs(_qs(event))
         if path == "/timelogs" and method == "POST":
             return _create_timelog(_body(event))
-        if re.match(r"^/timelogs/[\w-]+$", path) and method == "DELETE":
+        if re.match(r"^/timelogs/.+$", path) and method == "DELETE":
             return _delete_timelog(path.split("/")[-1])
 
         # ── Invoices ──
@@ -492,7 +519,7 @@ def lambda_handler(event, context):
             return _list_invoices(_qs(event))
         if path == "/invoices" and method == "POST":
             return _create_invoice(_body(event))
-        if re.match(r"^/invoices/[\w-]+$", path) and method == "PUT":
+        if re.match(r"^/invoices/.+$", path) and method == "PUT":
             return _update_invoice(path.split("/")[-1], _body(event))
 
         # ── Quotations ──
@@ -500,7 +527,7 @@ def lambda_handler(event, context):
             return _list_quotations()
         if path == "/quotations" and method == "POST":
             return _create_quotation(_body(event))
-        if re.match(r"^/quotations/[\w-]+$", path) and method == "PUT":
+        if re.match(r"^/quotations/.+$", path) and method == "PUT":
             return _update_quotation(path.split("/")[-1], _body(event))
 
         # ── Bank Details ──
@@ -513,7 +540,8 @@ def lambda_handler(event, context):
         if path == "/health":
             return _resp({"status": "healthy", "timestamp": _now()})
 
-        return _err("Not found", 404)
+        return _err(f"Not found: {method} {path}", 404)
 
     except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
         return _err(f"Internal error: {str(e)}", 500)
