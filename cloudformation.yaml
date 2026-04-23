@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Architectural Studio ERP - Lambda + DynamoDB + API Gateway
+Description: Architectural Studio ERP - Lambda + DynamoDB + API Gateway + S3
 
 Parameters:
   StageName:
@@ -138,6 +138,78 @@ Resources:
         - AttributeName: pk
           KeyType: HASH
 
+  LeavesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_leaves
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: employee_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: employee-index
+          KeySchema:
+            - AttributeName: employee_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  ExpensesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_expenses
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: employee_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: employee-index
+          KeySchema:
+            - AttributeName: employee_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  HolidaysTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: erp_holidays
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  # ─── S3 Bucket (leave attachments) ───
+
+  LeaveAttachmentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "erp-leave-attachments-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldAttachments
+            Status: Enabled
+            ExpirationInDays: 365
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT]
+            AllowedHeaders: ["*"]
+            MaxAge: 3600
+
   # ─── IAM Role ───
 
   LambdaExecutionRole:
@@ -177,6 +249,22 @@ Resources:
                   - !GetAtt QuotationsTable.Arn
                   - !GetAtt SettingsTable.Arn
                   - !GetAtt CountersTable.Arn
+                  - !GetAtt LeavesTable.Arn
+                  - !Sub "${LeavesTable.Arn}/index/*"
+                  - !GetAtt ExpensesTable.Arn
+                  - !Sub "${ExpensesTable.Arn}/index/*"
+                  - !GetAtt HolidaysTable.Arn
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GeneratePresignedUrl
+                Resource:
+                  - !Sub "${LeaveAttachmentsBucket.Arn}/*"
 
   # ─── Lambda Function ───
 
@@ -192,9 +280,9 @@ Resources:
       Environment:
         Variables:
           AWS_REGION_NAME: !Ref AWS::Region
+          S3_BUCKET_NAME: !Ref LeaveAttachmentsBucket
       Code:
         ZipFile: |
-          # Placeholder - deploy actual code via `aws lambda update-function-code`
           def lambda_handler(event, context):
               return {"statusCode": 200, "body": "Deploy actual code"}
 
@@ -206,17 +294,9 @@ Resources:
       Name: erp-api
       ProtocolType: HTTP
       CorsConfiguration:
-        AllowOrigins:
-          - "*"
-        AllowMethods:
-          - GET
-          - POST
-          - PUT
-          - DELETE
-          - OPTIONS
-        AllowHeaders:
-          - Content-Type
-          - Authorization
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+        AllowHeaders: [Content-Type, Authorization]
 
   LambdaIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -254,5 +334,5 @@ Outputs:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
   LambdaFunctionName:
     Value: !Ref ErpLambdaFunction
-  LambdaFunctionArn:
-    Value: !GetAtt ErpLambdaFunction.Arn
+  S3BucketName:
+    Value: !Ref LeaveAttachmentsBucket

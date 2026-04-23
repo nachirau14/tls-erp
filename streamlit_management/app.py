@@ -103,7 +103,8 @@ def show_app():
         page = st.radio("Nav", [
             "📊 Dashboard", "💰 Invoicing & GST", "📝 Quotations",
             "📁 Projects & Stages", "⏱ Time Tracking",
-            "📈 Cost of Labour", "👥 Employees & Users", "⚙️ Settings",
+            "📈 Cost of Labour", "👥 Employees & Users",
+            "🏖️ Leaves & Expenses", "📅 Holiday List", "⚙️ Settings",
         ], label_visibility="collapsed")
         st.divider()
         if st.button("🚪 Logout", use_container_width=True):
@@ -119,7 +120,8 @@ def show_app():
         "Dashboard": pg_dashboard, "Invoicing": pg_invoicing,
         "Quotation": pg_quotations, "Projects": pg_projects,
         "Time": pg_time, "Cost": pg_labour,
-        "Employees": pg_employees, "Settings": pg_settings,
+        "Employees": pg_employees, "Leaves": pg_leaves_expenses,
+        "Holiday": pg_holidays, "Settings": pg_settings,
     }
     for k, fn in routes.items():
         if k in page:
@@ -484,6 +486,36 @@ def pg_time():
         ).reset_index(drop=True)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
+        # ── Charts ──
+        st.markdown("---")
+        st.markdown("#### 📊 Time Distribution Charts")
+
+        # Chart 1: Hours per project (bar chart)
+        proj_hours = df.groupby("Project")["Hours"].sum().sort_values(ascending=True)
+        st.markdown("**Hours by Project**")
+        st.bar_chart(proj_hours)
+
+        # Chart 2: Hours per employee (bar chart)
+        emp_hours = df.groupby("Employee")["Hours"].sum().sort_values(ascending=True)
+        st.markdown("**Hours by Employee**")
+        st.bar_chart(emp_hours)
+
+        # Chart 3: Daily hours timeline (line chart)
+        daily = df.groupby("Date")["Hours"].sum().sort_index()
+        if len(daily) > 1:
+            st.markdown("**Daily Hours Trend**")
+            st.line_chart(daily)
+
+        # Chart 4: Employee × Project heatmap-style breakdown
+        pivot = df.pivot_table(values="Hours", index="Employee",
+                               columns="Project", aggfunc="sum",
+                               fill_value=0)
+        if len(pivot) > 0 and len(pivot.columns) > 0:
+            st.markdown("**Employee × Project Breakdown**")
+            st.dataframe(pivot.style.background_gradient(cmap="Blues",
+                         axis=None).format("{:.1f}"),
+                         use_container_width=True)
+
     with st.expander("➕ Log Time (Admin)"):
         with st.form("alog"):
             a, b = st.columns(2)
@@ -635,6 +667,36 @@ def pg_employees():
                 "Hourly (₹)": float(e.get("hourly_cost", 0)),
             } for e in employees]),
                 use_container_width=True, hide_index=True)
+
+            # Edit employee
+            with st.expander("✏️ Edit Employee"):
+                edit_emp = st.selectbox("Select Employee to Edit",
+                    [f"{e['name']} (ID:{e['id']})" for e in employees],
+                    key="edit_emp_sel")
+                edit_id = edit_emp.split("ID:")[1].rstrip(")")
+                edit_obj = next((e for e in employees if str(e["id"]) == edit_id), None)
+                if edit_obj:
+                    with st.form("edit_emp_form"):
+                        ea, eb = st.columns(2)
+                        with ea:
+                            new_name = st.text_input("Name", value=edit_obj.get("name", ""))
+                            new_role = st.text_input("Role", value=edit_obj.get("role", ""))
+                        with eb:
+                            new_salary = st.number_input("Monthly Salary (₹)",
+                                min_value=0.0, step=1000.0, format="%.2f",
+                                value=float(edit_obj.get("salary", 0)))
+                            if new_salary > 0:
+                                st.info(f"Daily: ₹{new_salary/30:,.2f} · Hourly: ₹{new_salary/30/8:,.2f}")
+                        if st.form_submit_button("Save Changes", type="primary", use_container_width=True):
+                            try:
+                                api.update_employee(edit_id, {
+                                    "name": new_name, "role": new_role, "salary": new_salary
+                                })
+                                st.success(f"'{new_name}' updated!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+
             de = st.selectbox(
                 "Remove employee",
                 ["—"] + [f"{e['name']} (ID:{e['id']})"
@@ -677,6 +739,124 @@ def pg_employees():
                 "Employee ID": u.get("employee_id", "—"),
             } for u in users]),
                 use_container_width=True, hide_index=True)
+
+
+# ═══ LEAVES & EXPENSES (Management view) ═══
+def pg_leaves_expenses():
+    st.markdown("### 🏖️ Leaves & Expenses Management")
+    try:
+        leaves = api.list_leaves()
+        expenses = api.list_expenses()
+        employees = api.list_employees()
+        projects = api.list_projects()
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return
+
+    em = {e["id"]: e["name"] for e in employees}
+    pm = {p["id"]: p["name"] for p in projects}
+
+    tab_l, tab_e = st.tabs(["🏖️ Leave Requests", "💳 Expenses"])
+
+    with tab_l:
+        total_leaves = len(leaves)
+        pending_l = len([l for l in leaves if l.get("status") == "pending"])
+        st.markdown(f"**{total_leaves} total requests** · **{pending_l} pending approval**")
+
+        for lv in leaves:
+            status_icon = {"pending": "🟡", "approved": "✅", "rejected": "❌"}.get(lv.get("status", ""), "🔘")
+            emp_name = em.get(lv.get("employee_id"), "?")
+            with st.expander(f"{status_icon} {emp_name} — {lv.get('leave_type', '')} | {lv.get('start_date', '')} to {lv.get('end_date', '')} ({float(lv.get('days', 0)):.0f}d)"):
+                st.markdown(f"**Reason:** {lv.get('reason', 'N/A')}")
+                new_status = st.selectbox("Status",
+                    ["pending", "approved", "rejected"],
+                    index=["pending", "approved", "rejected"].index(lv.get("status", "pending")),
+                    key=f"ls_{lv['id']}")
+                if new_status != lv.get("status"):
+                    if st.button("Update", key=f"lu_{lv['id']}"):
+                        api.update_leave(lv["id"], {"status": new_status})
+                        st.rerun()
+
+    with tab_e:
+        total_exp = sum(float(x.get("amount", 0)) for x in expenses)
+        pending_e = sum(float(x.get("amount", 0)) for x in expenses if x.get("status") == "pending")
+        st.markdown(f"**Total: ₹{total_exp:,.2f}** · **Pending: ₹{pending_e:,.2f}**")
+
+        if expenses:
+            for exp in expenses:
+                status_icon = {"pending": "🟡", "approved": "✅", "rejected": "❌"}.get(exp.get("status", ""), "🔘")
+                emp_name = em.get(exp.get("employee_id"), "?")
+                proj_name = pm.get(exp.get("project_id"), "—")
+                with st.expander(f"{status_icon} {emp_name} — {exp.get('category', '')} | ₹{float(exp.get('amount', 0)):,.2f} | {exp.get('date', '')}"):
+                    st.markdown(f"**Description:** {exp.get('description', 'N/A')}")
+                    st.markdown(f"**Project:** {proj_name}")
+                    new_status = st.selectbox("Status",
+                        ["pending", "approved", "rejected"],
+                        index=["pending", "approved", "rejected"].index(exp.get("status", "pending")),
+                        key=f"es_{exp['id']}")
+                    if new_status != exp.get("status"):
+                        if st.button("Update", key=f"eu_{exp['id']}"):
+                            api.update_expense(exp["id"], {"status": new_status})
+                            st.rerun()
+
+        # Expense summary by category
+        if expenses:
+            st.markdown("---")
+            st.markdown("#### Expense Summary by Category")
+            cat_totals = {}
+            for exp in expenses:
+                cat = exp.get("category", "Other")
+                cat_totals[cat] = cat_totals.get(cat, 0) + float(exp.get("amount", 0))
+            cat_df = pd.DataFrame([{"Category": k, "Total (₹)": v} for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])])
+            st.dataframe(cat_df, use_container_width=True, hide_index=True)
+            st.bar_chart(pd.Series(cat_totals, name="Amount (₹)"))
+
+
+# ═══ HOLIDAY LIST ═══
+def pg_holidays():
+    st.markdown("### 📅 Holiday List (Editable)")
+
+    current_year = str(datetime.now().year)
+    year_sel = st.selectbox("Year", [str(y) for y in range(2024, 2031)],
+                            index=[str(y) for y in range(2024, 2031)].index(current_year)
+                            if current_year in [str(y) for y in range(2024, 2031)] else 0)
+
+    try:
+        holidays = api.list_holidays(year=year_sel)
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return
+
+    with st.expander("➕ Add Holiday"):
+        with st.form("add_holiday"):
+            a, b = st.columns(2)
+            with a:
+                h_name = st.text_input("Holiday Name *", placeholder="e.g. Republic Day")
+                h_date = st.date_input("Date", value=date.today())
+            with b:
+                h_optional = st.checkbox("Optional / Restricted Holiday")
+            if st.form_submit_button("Add Holiday", type="primary", use_container_width=True):
+                if h_name:
+                    try:
+                        api.create_holiday(h_date.isoformat(), h_name, year_sel, h_optional)
+                        st.success(f"'{h_name}' added!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+    if holidays:
+        st.caption(f"{len(holidays)} holidays in {year_sel}")
+        for h in holidays:
+            htype = "Optional" if h.get("optional") else "Gazetted"
+            col_h, col_d = st.columns([6, 1])
+            with col_h:
+                st.markdown(f"**{h.get('date', '')}** — {h.get('name', '')} ({htype})")
+            with col_d:
+                if st.button("🗑️", key=f"hd_{h['id']}"):
+                    api.delete_holiday(h["id"])
+                    st.rerun()
+    else:
+        st.info(f"No holidays for {year_sel}. Add them above.")
 
 
 # ═══ SETTINGS ═══

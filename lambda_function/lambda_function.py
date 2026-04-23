@@ -31,6 +31,12 @@ TABLE_INVOICES   = dynamodb.Table("erp_invoices")
 TABLE_QUOTATIONS = dynamodb.Table("erp_quotations")
 TABLE_SETTINGS   = dynamodb.Table("erp_settings")
 TABLE_COUNTERS   = dynamodb.Table("erp_counters")
+TABLE_LEAVES     = dynamodb.Table("erp_leaves")
+TABLE_EXPENSES   = dynamodb.Table("erp_expenses")
+TABLE_HOLIDAYS   = dynamodb.Table("erp_holidays")
+
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME", "erp-leave-attachments")
+s3_client = boto3.client("s3", region_name=REGION)
 
 GST_RATE = Decimal("0.18")
 TDS_RATE = Decimal("0.10")
@@ -242,6 +248,24 @@ def _delete_employee(emp_id):
     TABLE_EMPLOYEES.delete_item(Key={"pk": emp_id})
     return _resp({"message": "Deleted"})
 
+def _update_employee(emp_id, data):
+    item = TABLE_EMPLOYEES.get_item(Key={"pk": emp_id}).get("Item")
+    if not item:
+        return _err("Not found", 404)
+    if "name" in data:
+        item["name"] = data["name"]
+    if "role" in data:
+        item["role"] = data["role"]
+    if "salary" in data:
+        salary = Decimal(str(data["salary"]))
+        daily = (salary / 30).quantize(Decimal("0.01"))
+        hourly = (daily / 8).quantize(Decimal("0.01"))
+        item["salary"] = salary
+        item["daily_cost"] = daily
+        item["hourly_cost"] = hourly
+    TABLE_EMPLOYEES.put_item(Item=item)
+    return _resp({"message": "Employee updated"})
+
 
 # ─── Projects ───
 
@@ -436,6 +460,158 @@ def _update_quotation(qtn_id, data):
     return _resp({"message": "Updated"})
 
 
+# ─── Leaves ───
+
+def _create_leave(data):
+    err = _require(data, ["employee_id", "start_date", "end_date", "leave_type"])
+    if err:
+        return _err(err)
+    pk = _uid()
+    TABLE_LEAVES.put_item(Item={
+        "pk": pk,
+        "employee_id": str(data["employee_id"]),
+        "start_date": data["start_date"],
+        "end_date": data["end_date"],
+        "leave_type": data["leave_type"],
+        "reason": data.get("reason", ""),
+        "status": data.get("status", "pending"),
+        "days": _dec(float(data.get("days", 1))),
+        "created_at": _now(),
+    })
+    return _resp({"message": "Leave request created", "id": pk})
+
+def _list_leaves(params):
+    emp_id = params.get("employee_id")
+    if emp_id:
+        resp = TABLE_LEAVES.query(
+            IndexName="employee-index",
+            KeyConditionExpression=Key("employee_id").eq(str(emp_id)),
+        )
+        items = resp.get("Items", [])
+    else:
+        items = _scan_all(TABLE_LEAVES)
+    items.sort(key=lambda x: x.get("start_date", ""), reverse=True)
+    return _resp([{**item, "id": item["pk"]} for item in items])
+
+def _update_leave(leave_id, data):
+    item = TABLE_LEAVES.get_item(Key={"pk": leave_id}).get("Item")
+    if not item:
+        return _err("Not found", 404)
+    for f in ["status", "reason", "start_date", "end_date", "leave_type"]:
+        if f in data:
+            item[f] = data[f]
+    if "days" in data:
+        item["days"] = _dec(float(data["days"]))
+    TABLE_LEAVES.put_item(Item=item)
+    return _resp({"message": "Leave updated"})
+
+def _delete_leave(leave_id):
+    TABLE_LEAVES.delete_item(Key={"pk": leave_id})
+    return _resp({"message": "Deleted"})
+
+def _get_leave_upload_url(data):
+    """Generate a presigned S3 URL for uploading leave attachments."""
+    filename = data.get("filename", "attachment.pdf")
+    leave_id = data.get("leave_id", _uid())
+    key = f"leaves/{leave_id}/{filename}"
+    url = s3_client.generate_presigned_url(
+        "put_object",
+        Params={"Bucket": S3_BUCKET, "Key": key, "ContentType": data.get("content_type", "application/pdf")},
+        ExpiresIn=3600,
+    )
+    return _resp({"upload_url": url, "key": key})
+
+
+# ─── Expenses ───
+
+def _create_expense(data):
+    err = _require(data, ["employee_id", "date", "amount", "category"])
+    if err:
+        return _err(err)
+    pk = _uid()
+    TABLE_EXPENSES.put_item(Item={
+        "pk": pk,
+        "employee_id": str(data["employee_id"]),
+        "date": data["date"],
+        "amount": _dec(float(data["amount"])),
+        "category": data["category"],
+        "description": data.get("description", ""),
+        "project_id": data.get("project_id", ""),
+        "status": data.get("status", "pending"),
+        "created_at": _now(),
+    })
+    return _resp({"message": "Expense created", "id": pk})
+
+def _list_expenses(params):
+    emp_id = params.get("employee_id")
+    if emp_id:
+        resp = TABLE_EXPENSES.query(
+            IndexName="employee-index",
+            KeyConditionExpression=Key("employee_id").eq(str(emp_id)),
+        )
+        items = resp.get("Items", [])
+    else:
+        items = _scan_all(TABLE_EXPENSES)
+    items.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return _resp([{**item, "id": item["pk"]} for item in items])
+
+def _update_expense(exp_id, data):
+    item = TABLE_EXPENSES.get_item(Key={"pk": exp_id}).get("Item")
+    if not item:
+        return _err("Not found", 404)
+    for f in ["status", "description", "category", "date", "project_id"]:
+        if f in data:
+            item[f] = data[f]
+    if "amount" in data:
+        item["amount"] = _dec(float(data["amount"]))
+    TABLE_EXPENSES.put_item(Item=item)
+    return _resp({"message": "Expense updated"})
+
+def _delete_expense(exp_id):
+    TABLE_EXPENSES.delete_item(Key={"pk": exp_id})
+    return _resp({"message": "Deleted"})
+
+
+# ─── Holidays ───
+
+def _create_holiday(data):
+    err = _require(data, ["date", "name"])
+    if err:
+        return _err(err)
+    pk = _uid()
+    TABLE_HOLIDAYS.put_item(Item={
+        "pk": pk,
+        "date": data["date"],
+        "name": data["name"],
+        "year": data.get("year", data["date"][:4]),
+        "optional": data.get("optional", False),
+        "created_at": _now(),
+    })
+    return _resp({"message": "Holiday added", "id": pk})
+
+def _list_holidays(params):
+    items = _scan_all(TABLE_HOLIDAYS)
+    year = params.get("year")
+    if year:
+        items = [i for i in items if i.get("year") == year]
+    items.sort(key=lambda x: x.get("date", ""))
+    return _resp([{**item, "id": item["pk"]} for item in items])
+
+def _update_holiday(hol_id, data):
+    item = TABLE_HOLIDAYS.get_item(Key={"pk": hol_id}).get("Item")
+    if not item:
+        return _err("Not found", 404)
+    for f in ["date", "name", "year", "optional"]:
+        if f in data:
+            item[f] = data[f]
+    TABLE_HOLIDAYS.put_item(Item=item)
+    return _resp({"message": "Holiday updated"})
+
+def _delete_holiday(hol_id):
+    TABLE_HOLIDAYS.delete_item(Key={"pk": hol_id})
+    return _resp({"message": "Deleted"})
+
+
 # ─── Bank Details (singleton) ───
 
 def _get_bank_details():
@@ -495,6 +671,8 @@ def lambda_handler(event, context):
             return _create_employee(_body(event))
         if re.match(r"^/employees/.+$", path) and method == "DELETE":
             return _delete_employee(path.split("/")[-1])
+        if re.match(r"^/employees/.+$", path) and method == "PUT":
+            return _update_employee(path.split("/")[-1], _body(event))
 
         # ── Projects ──
         if path == "/projects" and method == "GET":
@@ -535,6 +713,38 @@ def lambda_handler(event, context):
             return _get_bank_details()
         if path == "/bank-details" and method == "PUT":
             return _update_bank_details(_body(event))
+
+        # ── Leaves ──
+        if path == "/leaves" and method == "GET":
+            return _list_leaves(_qs(event))
+        if path == "/leaves" and method == "POST":
+            return _create_leave(_body(event))
+        if path == "/leaves/upload-url" and method == "POST":
+            return _get_leave_upload_url(_body(event))
+        if re.match(r"^/leaves/.+$", path) and method == "PUT":
+            return _update_leave(path.split("/")[-1], _body(event))
+        if re.match(r"^/leaves/.+$", path) and method == "DELETE":
+            return _delete_leave(path.split("/")[-1])
+
+        # ── Expenses ──
+        if path == "/expenses" and method == "GET":
+            return _list_expenses(_qs(event))
+        if path == "/expenses" and method == "POST":
+            return _create_expense(_body(event))
+        if re.match(r"^/expenses/.+$", path) and method == "PUT":
+            return _update_expense(path.split("/")[-1], _body(event))
+        if re.match(r"^/expenses/.+$", path) and method == "DELETE":
+            return _delete_expense(path.split("/")[-1])
+
+        # ── Holidays ──
+        if path == "/holidays" and method == "GET":
+            return _list_holidays(_qs(event))
+        if path == "/holidays" and method == "POST":
+            return _create_holiday(_body(event))
+        if re.match(r"^/holidays/.+$", path) and method == "PUT":
+            return _update_holiday(path.split("/")[-1], _body(event))
+        if re.match(r"^/holidays/.+$", path) and method == "DELETE":
+            return _delete_holiday(path.split("/")[-1])
 
         # ── Health ──
         if path == "/health":

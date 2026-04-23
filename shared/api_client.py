@@ -99,6 +99,10 @@ def delete_employee(emp_id):
     return _delete(f"/employees/{emp_id}")
 
 
+def update_employee(emp_id, data):
+    return _put(f"/employees/{emp_id}", data)
+
+
 # ─── Projects ───
 
 def list_projects():
@@ -189,3 +193,79 @@ def get_bank_details():
 
 def update_bank_details(data):
     return _put("/bank-details", data)
+
+
+# ─── Leaves ───
+
+def list_leaves(employee_id=None):
+    params = {}
+    if employee_id:
+        params["employee_id"] = employee_id
+    return _get("/leaves", params=params)
+
+
+def create_leave(employee_id, start_date, end_date, leave_type,
+                 reason="", days=1):
+    return _post("/leaves", {
+        "employee_id": employee_id, "start_date": start_date,
+        "end_date": end_date, "leave_type": leave_type,
+        "reason": reason, "days": days,
+    })
+
+
+def update_leave(leave_id, data):
+    return _put(f"/leaves/{leave_id}", data)
+
+
+def delete_leave(leave_id):
+    return _delete(f"/leaves/{leave_id}")
+
+
+# ─── Expenses ───
+
+def list_expenses(employee_id=None):
+    params = {}
+    if employee_id:
+        params["employee_id"] = employee_id
+    return _get("/expenses", params=params)
+
+
+def create_expense(employee_id, date, amount, category,
+                   description="", project_id=""):
+    return _post("/expenses", {
+        "employee_id": employee_id, "date": date, "amount": amount,
+        "category": category, "description": description,
+        "project_id": project_id,
+    })
+
+
+def update_expense(exp_id, data):
+    return _put(f"/expenses/{exp_id}", data)
+
+
+def delete_expense(exp_id):
+    return _delete(f"/expenses/{exp_id}")
+
+
+# ─── Holidays ───
+
+def list_holidays(year=None):
+    params = {}
+    if year:
+        params["year"] = year
+    return _get("/holidays", params=params)
+
+
+def create_holiday(date, name, year=None, optional=False):
+    return _post("/holidays", {
+        "date": date, "name": name,
+        "year": year or date[:4], "optional": optional,
+    })
+
+
+def update_holiday(hol_id, data):
+    return _put(f"/holidays/{hol_id}", data)
+
+
+def delete_holiday(hol_id):
+    return _delete(f"/holidays/{hol_id}")

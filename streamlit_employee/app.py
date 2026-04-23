@@ -93,7 +93,8 @@ def show_app():
         st.divider()
         page = st.radio("Nav",
                         ["🏠 Dashboard", "📁 Projects", "⏱ Log Time",
-                         "📋 My Time Logs"],
+                         "📋 My Time Logs", "🏖️ Leave Tracker",
+                         "💳 Expenses", "📅 Holidays"],
                         label_visibility="collapsed")
         st.divider()
         if st.button("🚪 Logout", use_container_width=True):
@@ -114,6 +115,12 @@ def show_app():
         page_log_time(user)
     elif "My Time" in page:
         page_my_logs(user)
+    elif "Leave" in page:
+        page_leaves(user)
+    elif "Expense" in page:
+        page_expenses(user)
+    elif "Holiday" in page:
+        page_holidays()
 
 
 def page_dashboard(user):
@@ -315,6 +322,162 @@ def page_my_logs(user):
         "Date", ascending=False
     ).reset_index(drop=True)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def page_leaves(user):
+    st.markdown("### 🏖️ Leave Tracker")
+    emp_id = user.get("employee_id", "")
+    try:
+        leaves = api.list_leaves(employee_id=emp_id) if emp_id else api.list_leaves()
+        employees = api.list_employees()
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return
+
+    emp_match = next((e for e in employees if str(e["id"]) == str(emp_id)), None) if emp_id else None
+    LEAVE_TYPES = ["Casual Leave", "Sick Leave", "Earned Leave", "Comp Off", "Work From Home", "Half Day", "Other"]
+
+    # Summary
+    total_days = sum(float(l.get("days", 0)) for l in leaves)
+    approved = sum(float(l.get("days", 0)) for l in leaves if l.get("status") == "approved")
+    pending = sum(float(l.get("days", 0)) for l in leaves if l.get("status") == "pending")
+
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric("Total Requested", f"{total_days:.0f} days")
+    with c2: st.metric("Approved", f"{approved:.0f} days")
+    with c3: st.metric("Pending", f"{pending:.0f} days")
+
+    with st.expander("➕ Apply for Leave"):
+        with st.form("apply_leave"):
+            a, b = st.columns(2)
+            with a:
+                lt = st.selectbox("Leave Type *", LEAVE_TYPES)
+                sd = st.date_input("Start Date", value=date.today())
+            with b:
+                days = st.number_input("Number of Days", min_value=0.5, max_value=30.0, step=0.5, value=1.0)
+                ed = st.date_input("End Date", value=date.today())
+            reason = st.text_area("Reason", height=80)
+            if st.form_submit_button("Apply", type="primary", use_container_width=True):
+                sel_emp_id = emp_match["id"] if emp_match else emp_id
+                if not sel_emp_id:
+                    st.error("No employee profile linked.")
+                else:
+                    try:
+                        api.create_leave(sel_emp_id, sd.isoformat(), ed.isoformat(), lt, reason, days)
+                        st.success("Leave applied!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+    if leaves:
+        status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
+        df = pd.DataFrame([{
+            "Status": status_icons.get(l.get("status", ""), "🔘") + " " + l.get("status", "").title(),
+            "Type": l.get("leave_type", ""),
+            "From": l.get("start_date", ""),
+            "To": l.get("end_date", ""),
+            "Days": float(l.get("days", 0)),
+            "Reason": l.get("reason", ""),
+        } for l in leaves])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No leave records.")
+
+
+def page_expenses(user):
+    st.markdown("### 💳 Expense Tracker")
+    emp_id = user.get("employee_id", "")
+    try:
+        expenses = api.list_expenses(employee_id=emp_id) if emp_id else api.list_expenses()
+        employees = api.list_employees()
+        projects = api.list_projects()
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return
+
+    emp_match = next((e for e in employees if str(e["id"]) == str(emp_id)), None) if emp_id else None
+    CATEGORIES = ["Site Visit", "Travel / Flight", "Cab / Transport", "Food & Meals", "Office Supplies", "Printing / Plotting", "Software / License", "Other"]
+    pm = {p["id"]: p["name"] for p in projects}
+
+    # Summary
+    total = sum(float(x.get("amount", 0)) for x in expenses)
+    approved = sum(float(x.get("amount", 0)) for x in expenses if x.get("status") == "approved")
+    pending = sum(float(x.get("amount", 0)) for x in expenses if x.get("status") == "pending")
+
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric("Total Claimed", f"₹{total:,.2f}")
+    with c2: st.metric("Approved", f"₹{approved:,.2f}")
+    with c3: st.metric("Pending", f"₹{pending:,.2f}")
+
+    with st.expander("➕ Add Expense"):
+        with st.form("add_expense"):
+            a, b = st.columns(2)
+            with a:
+                cat = st.selectbox("Category *", CATEGORIES)
+                amt = st.number_input("Amount (₹) *", min_value=0.0, step=100.0, format="%.2f")
+            with b:
+                exp_date = st.date_input("Date", value=date.today())
+                proj_opts = {"None": ""} | {p["name"]: p["id"] for p in projects}
+                sel_proj = st.selectbox("Project (optional)", list(proj_opts.keys()))
+            desc = st.text_area("Description", height=80, placeholder="e.g. Cab to site, flight to Mumbai...")
+            if st.form_submit_button("Submit Expense", type="primary", use_container_width=True):
+                sel_emp_id = emp_match["id"] if emp_match else emp_id
+                if not sel_emp_id:
+                    st.error("No employee profile linked.")
+                elif amt <= 0:
+                    st.error("Enter a valid amount.")
+                else:
+                    try:
+                        api.create_expense(sel_emp_id, exp_date.isoformat(), amt, cat, desc, proj_opts[sel_proj])
+                        st.success("Expense submitted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+    if expenses:
+        status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
+        df = pd.DataFrame([{
+            "Status": status_icons.get(x.get("status", ""), "🔘") + " " + x.get("status", "").title(),
+            "Date": x.get("date", ""),
+            "Category": x.get("category", ""),
+            "Amount (₹)": float(x.get("amount", 0)),
+            "Project": pm.get(x.get("project_id"), "—"),
+            "Description": x.get("description", ""),
+        } for x in expenses])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No expenses recorded.")
+
+
+def page_holidays():
+    st.markdown("### 📅 Holiday Calendar")
+    try:
+        current_year = str(datetime.now().year)
+        holidays = api.list_holidays(year=current_year)
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return
+
+    year_sel = st.selectbox("Year", [str(y) for y in range(2024, 2031)],
+                            index=[str(y) for y in range(2024, 2031)].index(current_year)
+                            if current_year in [str(y) for y in range(2024, 2031)] else 0)
+    if year_sel != current_year:
+        try:
+            holidays = api.list_holidays(year=year_sel)
+        except Exception as e:
+            st.error(f"Error: {e}")
+            return
+
+    if holidays:
+        df = pd.DataFrame([{
+            "Date": h.get("date", ""),
+            "Holiday": h.get("name", ""),
+            "Type": "Optional" if h.get("optional") else "Gazetted",
+        } for h in holidays])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.caption(f"{len(holidays)} holidays in {year_sel}")
+    else:
+        st.info(f"No holidays added for {year_sel} yet. Ask your admin to add them.")
 
 
 # ── Entry ──
