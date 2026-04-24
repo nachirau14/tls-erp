@@ -207,6 +207,9 @@ def pg_invoicing():
                 amt = st.number_input("Basic Amount (₹) *", min_value=0.0,
                                       step=1000.0, format="%.2f")
                 dt = st.date_input("Date", value=date.today())
+            custom_notes = st.text_area("Custom Details (multi-line)",
+                height=100,
+                placeholder="e.g.\nTOTAL DESIGN FEE: ₹11,00,000/- (Service Tax not included)\nAMOUNT PAID TILL DATE - 60%  ₹6,60,000/-\nFINAL BALANCE AMOUNT TO BE PAID - ₹3,40,000/-")
             if amt > 0:
                 g = round(amt * 0.18, 2)
                 t = round(amt * 0.10, 2)
@@ -220,7 +223,8 @@ def pg_invoicing():
                 if cn and amt > 0:
                     try:
                         res = api.create_invoice(cn, amt, dt.isoformat(),
-                                                 desc, it)
+                                                 desc, it,
+                                                 custom_notes=custom_notes)
                         st.success(
                             f"Invoice {res.get('invoice_number', '')} created!")
                         st.rerun()
@@ -243,6 +247,12 @@ def pg_invoicing():
                 st.markdown(f"**Total:** {inr(inv.get('total', 0))}")
                 st.markdown(f"**Receivable:** {inr(inv.get('receivable', 0))}")
                 st.markdown(f"**Description:** {inv.get('description', '—')}")
+
+            # Show custom notes if present
+            notes = inv.get("custom_notes", "")
+            if notes and notes.strip():
+                st.markdown("**Custom Details:**")
+                st.text(notes)
 
             b1, b2, b3 = st.columns(3)
             with b1:
@@ -290,6 +300,47 @@ def pg_invoicing():
         st.dataframe(pd.DataFrame(rows), use_container_width=True,
                      hide_index=True)
 
+        # ── Per-quarter expandable invoice list with PDF downloads ──
+        st.markdown("#### 📥 Download Invoices by Quarter")
+        for q in quarters:
+            qi = [i for i in invoices if i.get("quarter") == q]
+            fy = qi[0].get("fy", "") if qi else ""
+            q_gst = sum(float(i.get("gst", 0)) for i in qi)
+            with st.expander(f"**{q} ({fy})** — {len(qi)} invoices — GST: {inr(q_gst)}"):
+                for inv in qi:
+                    paid = "✅" if inv.get("received") else "⏳"
+                    col_info, col_btn = st.columns([5, 2])
+                    with col_info:
+                        st.markdown(
+                            f"{paid} **{inv.get('invoice_number', '')}** | "
+                            f"{inv.get('client_name', '')} | "
+                            f"Basic: {inr(inv.get('basic_amount', 0))} | "
+                            f"GST: {inr(inv.get('gst', 0))}")
+                    with col_btn:
+                        if st.button("📄 PDF", key=f"gstpdf_{q}_{inv['id']}"):
+                            try:
+                                result = api.generate_invoice_pdf(inv["id"])
+                                url = result.get("download_url", "")
+                                if url:
+                                    st.markdown(f"[⬇️ Download]({url})")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                # Bulk generate button
+                if st.button(f"📄 Generate All {q} PDFs", key=f"bulk_{q}"):
+                    links = []
+                    for inv in qi:
+                        try:
+                            result = api.generate_invoice_pdf(inv["id"])
+                            url = result.get("download_url", "")
+                            if url:
+                                links.append((inv.get("invoice_number", ""), url))
+                        except Exception:
+                            pass
+                    if links:
+                        st.success(f"Generated {len(links)} PDFs!")
+                        for name, url in links:
+                            st.markdown(f"[⬇️ {name}]({url})")
+
 
 # ═══ QUOTATIONS ═══
 def pg_quotations():
@@ -321,6 +372,7 @@ def pg_quotations():
                 qa = st.number_input("Amount (₹)", min_value=0.0,
                                      step=10000.0, format="%.2f")
                 qd = st.date_input("Date", value=date.today())
+            q_subject = st.text_input("Subject", placeholder="e.g. Interior Design Consultancy for...")
             qs = st.text_area("Scope of Work", height=120)
             qt = st.text_area("Timelines", height=80)
             qv = st.text_area("Deliverables", height=80)
@@ -333,7 +385,7 @@ def pg_quotations():
                         api.create_quotation({
                             "client_name": qc, "project_name": qp,
                             "date": qd.isoformat(), "total_amount": qa,
-                            "scope": qs, "timelines": qt,
+                            "subject": q_subject, "scope": qs, "timelines": qt,
                             "deliverables": qv, "legal_clauses": ql,
                             "payment_structure": qpm,
                         })
@@ -362,6 +414,7 @@ def pg_quotations():
                 with eq2:
                     e_amount = st.number_input("Amount (₹)", value=float(q.get("total_amount", 0)),
                         min_value=0.0, step=10000.0, format="%.2f", key=f"eqa_{q['id']}")
+                e_subject = st.text_input("Subject", value=q.get("subject", ""), key=f"eqsb_{q['id']}")
                 e_scope = st.text_area("Scope of Work", value=q.get("scope", ""), height=100, key=f"eqsc_{q['id']}")
                 e_timelines = st.text_area("Timelines", value=q.get("timelines", ""), height=60, key=f"eqt_{q['id']}")
                 e_deliverables = st.text_area("Deliverables", value=q.get("deliverables", ""), height=60, key=f"eqd_{q['id']}")
@@ -373,7 +426,7 @@ def pg_quotations():
                         api.update_quotation(q["id"], {
                             "client_name": e_client, "project_name": e_project,
                             "status": e_status, "total_amount": e_amount,
-                            "scope": e_scope, "timelines": e_timelines,
+                            "subject": e_subject, "scope": e_scope, "timelines": e_timelines,
                             "deliverables": e_deliverables, "legal_clauses": e_legal,
                             "payment_structure": e_payment,
                         })

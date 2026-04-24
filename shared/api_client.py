@@ -159,11 +159,11 @@ def list_invoices(quarter=None, fy=None):
 
 
 def create_invoice(client_name, amount, date, description="",
-                   invoice_type="tax", project_id=""):
+                   invoice_type="tax", project_id="", custom_notes=""):
     return _post("/invoices", {
         "client_name": client_name, "amount": amount, "date": date,
         "description": description, "invoice_type": invoice_type,
-        "project_id": project_id,
+        "project_id": project_id, "custom_notes": custom_notes,
     })
 
 

@@ -158,15 +158,19 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
             img = Image(logo_stream, width=60*mm, height=20*mm)
             img.hAlign = "CENTER"
             story.append(img)
-            story.append(Spacer(1, 4*mm))
+            story.append(Spacer(1, 6*mm))
         except Exception:
-            pass
-
-    # ── Company name ──
-    company_name = settings.get("account_name", "Studio")
-    story.append(Paragraph(company_name, ss["CompanyName"]))
-    tag = settings.get("company_tagline", "Architecture | Design")
-    story.append(Paragraph(tag, ss["CompanyTag"]))
+            # Fallback to text if logo fails
+            company_name = settings.get("account_name", "Studio")
+            story.append(Paragraph(company_name, ss["CompanyName"]))
+            tag = settings.get("company_tagline", "Architecture | Design")
+            story.append(Paragraph(tag, ss["CompanyTag"]))
+    else:
+        # No logo uploaded — show company name as text
+        company_name = settings.get("account_name", "Studio")
+        story.append(Paragraph(company_name, ss["CompanyName"]))
+        tag = settings.get("company_tagline", "Architecture | Design")
+        story.append(Paragraph(tag, ss["CompanyTag"]))
 
     # ── Document title ──
     inv_type = invoice.get("invoice_type", "tax")
@@ -211,6 +215,16 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
         story.append(t)
 
     story.append(Spacer(1, 5*mm))
+
+    # ── Custom Notes (multi-line free text like TOTAL DESIGN FEE, AMOUNT PAID etc.) ──
+    custom_notes = invoice.get("custom_notes", "")
+    if custom_notes and custom_notes.strip():
+        for line in custom_notes.split("\n"):
+            line = line.strip()
+            if line:
+                story.append(Paragraph(line, ss["Body"]))
+        story.append(Spacer(1, 4*mm))
+
     story.append(HRFlowable(width="100%", thickness=0.5, color=CLR_LINE))
     story.append(Spacer(1, 3*mm))
 
@@ -322,15 +336,17 @@ def generate_quotation_pdf(quotation, settings, logo_bytes=None):
             img = Image(logo_stream, width=60*mm, height=20*mm)
             img.hAlign = "CENTER"
             story.append(img)
-            story.append(Spacer(1, 4*mm))
+            story.append(Spacer(1, 6*mm))
         except Exception:
-            pass
-
-    # ── Company name ──
-    company_name = settings.get("account_name", "Studio")
-    story.append(Paragraph(company_name, ss["CompanyName"]))
-    tag = settings.get("company_tagline", "Architecture | Design")
-    story.append(Paragraph(tag, ss["CompanyTag"]))
+            company_name = settings.get("account_name", "Studio")
+            story.append(Paragraph(company_name, ss["CompanyName"]))
+            tag = settings.get("company_tagline", "Architecture | Design")
+            story.append(Paragraph(tag, ss["CompanyTag"]))
+    else:
+        company_name = settings.get("account_name", "Studio")
+        story.append(Paragraph(company_name, ss["CompanyName"]))
+        tag = settings.get("company_tagline", "Architecture | Design")
+        story.append(Paragraph(tag, ss["CompanyTag"]))
 
     # ── Title ──
     story.append(Paragraph("QUOTATION", ss["DocTitle"]))
@@ -371,6 +387,14 @@ def generate_quotation_pdf(quotation, settings, logo_bytes=None):
         story.append(t)
 
     story.append(Spacer(1, 4*mm))
+
+    # ── Subject line ──
+    subject = quotation.get("subject", "")
+    if subject and subject.strip():
+        story.append(HRFlowable(width="100%", thickness=0.3, color=CLR_LINE))
+        story.append(Paragraph(f"<b>SUBJECT</b>", ss["SectionHead"]))
+        story.append(Paragraph(subject, ss["Body"]))
+        story.append(Spacer(1, 3*mm))
 
     # ── Sections ──
     sections = [

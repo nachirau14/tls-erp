@@ -402,6 +402,7 @@ def _create_invoice(data):
         "invoice_number": f"INV-{str(inv_num).zfill(4)}",
         "client_name": data["client_name"],
         "description": data.get("description", ""),
+        "custom_notes": data.get("custom_notes", ""),
         "invoice_type": data.get("invoice_type", "tax"),
         "date": data["date"],
         "basic_amount": amt, "gst": gst, "tds": tds,
@@ -432,7 +433,7 @@ def _update_invoice(inv_id, data):
     if "received" in data:
         item["received"] = bool(data["received"])
         item["received_date"] = _now()[:10] if data["received"] else ""
-    for f in ["client_name", "description", "invoice_type"]:
+    for f in ["client_name", "description", "custom_notes", "invoice_type"]:
         if f in data:
             item[f] = data[f]
     TABLE_INVOICES.put_item(Item=item)
@@ -455,6 +456,7 @@ def _create_quotation(data):
         "date": data.get("date", _now()[:10]),
         "total_amount": _dec(float(data.get("total_amount", 0))),
         "scope": data.get("scope", ""),
+        "subject": data.get("subject", ""),
         "timelines": data.get("timelines", ""),
         "deliverables": data.get("deliverables", ""),
         "legal_clauses": data.get("legal_clauses", ""),
@@ -473,7 +475,7 @@ def _update_quotation(qtn_id, data):
     item = TABLE_QUOTATIONS.get_item(Key={"pk": qtn_id}).get("Item")
     if not item:
         return _err("Not found", 404)
-    for f in ["client_name", "project_name", "scope", "timelines",
+    for f in ["client_name", "project_name", "subject", "scope", "timelines",
               "deliverables", "legal_clauses", "payment_structure", "status"]:
         if f in data:
             item[f] = data[f]
