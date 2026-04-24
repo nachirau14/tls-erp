@@ -229,24 +229,49 @@ def pg_invoicing():
 
     for inv in fl:
         paid = "✅" if inv.get("received") else "⏳"
-        ci, cb = st.columns([8, 1])
-        with ci:
-            st.markdown(
-                f"**{inv.get('invoice_number', '')}** | "
-                f"{inv.get('date', '')} | {inv.get('client_name', '')} | "
-                f"{'Tax' if inv.get('invoice_type') == 'tax' else 'Proforma'} | "
-                f"Basic: {inr(inv.get('basic_amount', 0))} | "
-                f"Total: {inr(inv.get('total', 0))} | "
-                f"Receivable: {inr(inv.get('receivable', 0))} | {paid}")
-        with cb:
-            if inv.get("received"):
-                if st.button("Unpaid", key=f"up_{inv['id']}"):
-                    api.update_invoice(inv["id"], {"received": False})
-                    st.rerun()
-            else:
-                if st.button("Paid ✓", key=f"pd_{inv['id']}"):
-                    api.update_invoice(inv["id"], {"received": True})
-                    st.rerun()
+        label = (f"{paid} **{inv.get('invoice_number', '')}** | "
+                 f"{inv.get('date', '')} | {inv.get('client_name', '')} | "
+                 f"{'Tax' if inv.get('invoice_type') == 'tax' else 'Proforma'} | "
+                 f"Total: {inr(inv.get('total', 0))}")
+        with st.expander(label):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**Basic:** {inr(inv.get('basic_amount', 0))}")
+                st.markdown(f"**GST:** {inr(inv.get('gst', 0))}")
+                st.markdown(f"**TDS:** {inr(inv.get('tds', 0))}")
+            with c2:
+                st.markdown(f"**Total:** {inr(inv.get('total', 0))}")
+                st.markdown(f"**Receivable:** {inr(inv.get('receivable', 0))}")
+                st.markdown(f"**Description:** {inv.get('description', '—')}")
+
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if inv.get("received"):
+                    if st.button("Mark Unpaid", key=f"up_{inv['id']}"):
+                        api.update_invoice(inv["id"], {"received": False})
+                        st.rerun()
+                else:
+                    if st.button("Mark Paid ✓", key=f"pd_{inv['id']}"):
+                        api.update_invoice(inv["id"], {"received": True})
+                        st.rerun()
+            with b2:
+                if st.button("📄 Generate PDF", key=f"ipdf_{inv['id']}"):
+                    try:
+                        result = api.generate_invoice_pdf(inv["id"])
+                        url = result.get("download_url", "")
+                        if url:
+                            st.markdown(f"[⬇️ Download Invoice PDF]({url})")
+                        st.success("PDF generated!")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            with b3:
+                if st.button("🗑️ Delete", key=f"dinv_{inv['id']}"):
+                    try:
+                        api.delete_invoice(inv["id"])
+                        st.success("Deleted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
     if quarters:
         st.markdown("---")
@@ -325,38 +350,58 @@ def pg_quotations():
             f"{q.get('client_name', '')} | {q.get('project_name', '')} | "
             f"{inr(q.get('total_amount', 0))}"
         ):
-            ns = st.selectbox(
-                "Status", ["draft", "sent", "accepted", "rejected"],
-                index=["draft", "sent", "accepted", "rejected"].index(
-                    q.get("status", "draft")),
-                key=f"qs_{q['id']}",
-            )
-            if ns != q.get("status"):
-                if st.button("Update Status", key=f"qu_{q['id']}"):
-                    api.update_quotation(q["id"], {"status": ns})
-                    st.rerun()
-            st.markdown("---")
-            for sec, lbl in [
-                ("scope", "Scope of Work"), ("timelines", "Timelines"),
-                ("deliverables", "Deliverables"),
-                ("legal_clauses", "Legal Clauses"),
-                ("payment_structure", "Payment Structure"),
-            ]:
-                if q.get(sec):
-                    st.markdown(f"**{lbl}:**")
-                    st.text(q[sec])
-            if any(bank.get(k) for k in
-                   ["bank_name", "account_number", "ifsc"]):
-                st.markdown("---")
-                st.markdown("**🏦 Bank Details:**")
-                st.markdown(
-                    f"Bank: {bank.get('bank_name', '')} | "
-                    f"Branch: {bank.get('branch', '')} | "
-                    f"A/C: {bank.get('account_name', '')} "
-                    f"{bank.get('account_number', '')} | "
-                    f"IFSC: {bank.get('ifsc', '')} | "
-                    f"PAN: {bank.get('pan', '')} | "
-                    f"GSTIN: {bank.get('gstin', '')}")
+            # ── Edit all fields ──
+            with st.form(f"edit_qtn_{q['id']}"):
+                eq1, eq2 = st.columns(2)
+                with eq1:
+                    e_client = st.text_input("Client", value=q.get("client_name", ""), key=f"eqc_{q['id']}")
+                    e_project = st.text_input("Project", value=q.get("project_name", ""), key=f"eqp_{q['id']}")
+                    e_status = st.selectbox("Status", ["draft", "sent", "accepted", "rejected"],
+                        index=["draft", "sent", "accepted", "rejected"].index(q.get("status", "draft")),
+                        key=f"eqs_{q['id']}")
+                with eq2:
+                    e_amount = st.number_input("Amount (₹)", value=float(q.get("total_amount", 0)),
+                        min_value=0.0, step=10000.0, format="%.2f", key=f"eqa_{q['id']}")
+                e_scope = st.text_area("Scope of Work", value=q.get("scope", ""), height=100, key=f"eqsc_{q['id']}")
+                e_timelines = st.text_area("Timelines", value=q.get("timelines", ""), height=60, key=f"eqt_{q['id']}")
+                e_deliverables = st.text_area("Deliverables", value=q.get("deliverables", ""), height=60, key=f"eqd_{q['id']}")
+                e_legal = st.text_area("Legal Clauses", value=q.get("legal_clauses", ""), height=100, key=f"eql_{q['id']}")
+                e_payment = st.text_area("Payment Structure", value=q.get("payment_structure", ""), height=80, key=f"eqpm_{q['id']}")
+
+                if st.form_submit_button("💾 Save All Changes", type="primary", use_container_width=True):
+                    try:
+                        api.update_quotation(q["id"], {
+                            "client_name": e_client, "project_name": e_project,
+                            "status": e_status, "total_amount": e_amount,
+                            "scope": e_scope, "timelines": e_timelines,
+                            "deliverables": e_deliverables, "legal_clauses": e_legal,
+                            "payment_structure": e_payment,
+                        })
+                        st.success("Quotation updated!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+            # ── PDF & Delete buttons ──
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("📄 Generate PDF", key=f"qpdf_{q['id']}"):
+                    try:
+                        result = api.generate_quotation_pdf(q["id"])
+                        url = result.get("download_url", "")
+                        if url:
+                            st.markdown(f"[⬇️ Download Quotation PDF]({url})")
+                        st.success("PDF generated!")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            with b2:
+                if st.button("🗑️ Delete Quotation", key=f"dqtn_{q['id']}"):
+                    try:
+                        api.delete_quotation(q["id"])
+                        st.success("Deleted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
 
 # ═══ PROJECTS ═══
@@ -879,7 +924,60 @@ def pg_settings():
     except Exception:
         bank = {}
 
-    st.markdown("#### 🏦 Bank Details (appears on Quotations)")
+    # ── Logo Upload ──
+    st.markdown("#### 🖼️ Company Logo")
+    st.caption("This logo appears at the top of generated Invoice and Quotation PDFs.")
+    try:
+        logo_info = api.get_logo_url()
+        if logo_info.get("exists"):
+            st.image(logo_info["url"], width=200)
+            st.caption("Current logo uploaded.")
+    except Exception:
+        pass
+
+    logo_file = st.file_uploader("Upload Logo (PNG or JPG)", type=["png", "jpg", "jpeg"])
+    if logo_file:
+        if st.button("Upload Logo", type="primary"):
+            import base64
+            b64 = base64.b64encode(logo_file.read()).decode()
+            ct = "image/png" if logo_file.name.endswith(".png") else "image/jpeg"
+            try:
+                api.upload_logo(b64, ct)
+                st.success("Logo uploaded!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    st.markdown("---")
+
+    # ── Company & Signatory Details ──
+    st.markdown("#### 🏢 Company & Signatory (for PDFs)")
+    with st.form("company_details"):
+        a, b = st.columns(2)
+        with a:
+            c_tagline = st.text_input("Company Tagline",
+                value=bank.get("company_tagline", "Architecture | Design"))
+            c_email = st.text_input("Email", value=bank.get("email", ""))
+            c_phone = st.text_input("Phone", value=bank.get("phone", ""))
+        with b:
+            c_address = st.text_input("Address", value=bank.get("address", ""))
+            c_signatory = st.text_input("Signatory Name", value=bank.get("signatory_name", ""))
+            c_title = st.text_input("Signatory Title", value=bank.get("signatory_title", "Principal Architect"))
+        if st.form_submit_button("Save Company Details", type="primary", use_container_width=True):
+            try:
+                updated = {**bank, "company_tagline": c_tagline, "email": c_email,
+                    "phone": c_phone, "address": c_address,
+                    "signatory_name": c_signatory, "signatory_title": c_title}
+                api.update_bank_details(updated)
+                st.success("Saved!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    st.markdown("---")
+
+    # ── Bank Details ──
+    st.markdown("#### 🏦 Bank Details (appears on Quotations & Invoices)")
     with st.form("bank"):
         a, b = st.columns(2)
         with a:
@@ -899,11 +997,10 @@ def pg_settings():
         if st.form_submit_button("Save Bank Details", type="primary",
                                  use_container_width=True):
             try:
-                api.update_bank_details({
-                    "bank_name": bn, "branch": bb, "account_name": ba,
-                    "account_number": bnum, "ifsc": bi,
-                    "pan": bp, "gstin": bg,
-                })
+                updated = {**bank, "bank_name": bn, "branch": bb,
+                    "account_name": ba, "account_number": bnum,
+                    "ifsc": bi, "pan": bp, "gstin": bg}
+                api.update_bank_details(updated)
                 st.success("Saved!")
             except Exception as e:
                 st.error(f"Error: {e}")

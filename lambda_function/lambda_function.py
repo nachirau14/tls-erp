@@ -56,6 +56,9 @@ def _get_table_holidays():
     return _TABLE_HOLIDAYS
 
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME", "erp-leave-attachments")
+S3_QUOTATIONS = os.environ.get("S3_QUOTATIONS_BUCKET", "erp-quotations")
+S3_INVOICES = os.environ.get("S3_INVOICES_BUCKET", "erp-invoices")
+S3_LOGO = os.environ.get("S3_LOGO_BUCKET", "erp-assets")
 s3_client = boto3.client("s3", region_name=REGION)
 
 GST_RATE = Decimal("0.18")
@@ -479,6 +482,109 @@ def _update_quotation(qtn_id, data):
     TABLE_QUOTATIONS.put_item(Item=item)
     return _resp({"message": "Updated"})
 
+def _delete_quotation(qtn_id):
+    # Also delete S3 PDF if exists
+    try:
+        s3_client.delete_object(Bucket=S3_QUOTATIONS, Key=f"quotations/{qtn_id}.pdf")
+    except Exception:
+        pass
+    TABLE_QUOTATIONS.delete_item(Key={"pk": qtn_id})
+    return _resp({"message": "Deleted"})
+
+def _delete_invoice(inv_id):
+    # Also delete S3 PDF if exists
+    try:
+        s3_client.delete_object(Bucket=S3_INVOICES, Key=f"invoices/{inv_id}.pdf")
+    except Exception:
+        pass
+    TABLE_INVOICES.delete_item(Key={"pk": inv_id})
+    return _resp({"message": "Deleted"})
+
+
+# ─── PDF Generation & S3 Storage ───
+
+def _get_settings_dict():
+    """Get all settings as a flat dict."""
+    item = TABLE_SETTINGS.get_item(Key={"pk": "bank_details"}).get("Item", {})
+    return {k: v for k, v in item.items() if k != "pk"}
+
+def _get_logo_bytes():
+    """Fetch logo from S3 if it exists."""
+    try:
+        resp = s3_client.get_object(Bucket=S3_LOGO, Key="logo/company_logo.png")
+        return resp["Body"].read()
+    except Exception:
+        return None
+
+def _generate_invoice_pdf(inv_id):
+    """Generate PDF for an invoice, store in S3, return download URL."""
+    from pdf_generator import generate_invoice_pdf
+
+    item = TABLE_INVOICES.get_item(Key={"pk": inv_id}).get("Item")
+    if not item:
+        return _err("Invoice not found", 404)
+
+    settings = _get_settings_dict()
+    logo = _get_logo_bytes()
+    inv_dict = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
+
+    pdf_bytes = generate_invoice_pdf(inv_dict, settings, logo)
+
+    s3_key = f"invoices/{inv_id}.pdf"
+    s3_client.put_object(Bucket=S3_INVOICES, Key=s3_key, Body=pdf_bytes,
+                         ContentType="application/pdf")
+
+    url = s3_client.generate_presigned_url("get_object",
+        Params={"Bucket": S3_INVOICES, "Key": s3_key}, ExpiresIn=3600)
+    return _resp({"message": "PDF generated", "download_url": url, "s3_key": s3_key})
+
+def _generate_quotation_pdf(qtn_id):
+    """Generate PDF for a quotation, store in S3, return download URL."""
+    from pdf_generator import generate_quotation_pdf
+
+    item = TABLE_QUOTATIONS.get_item(Key={"pk": qtn_id}).get("Item")
+    if not item:
+        return _err("Quotation not found", 404)
+
+    settings = _get_settings_dict()
+    logo = _get_logo_bytes()
+    qtn_dict = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
+
+    pdf_bytes = generate_quotation_pdf(qtn_dict, settings, logo)
+
+    s3_key = f"quotations/{qtn_id}.pdf"
+    s3_client.put_object(Bucket=S3_QUOTATIONS, Key=s3_key, Body=pdf_bytes,
+                         ContentType="application/pdf")
+
+    url = s3_client.generate_presigned_url("get_object",
+        Params={"Bucket": S3_QUOTATIONS, "Key": s3_key}, ExpiresIn=3600)
+    return _resp({"message": "PDF generated", "download_url": url, "s3_key": s3_key})
+
+def _upload_logo(data):
+    """Get presigned URL for logo upload, or handle base64 upload."""
+    if data.get("base64"):
+        import base64
+        logo_bytes = base64.b64decode(data["base64"])
+        s3_client.put_object(Bucket=S3_LOGO, Key="logo/company_logo.png",
+                             Body=logo_bytes, ContentType=data.get("content_type", "image/png"))
+        return _resp({"message": "Logo uploaded"})
+    else:
+        url = s3_client.generate_presigned_url("put_object",
+            Params={"Bucket": S3_LOGO, "Key": "logo/company_logo.png",
+                     "ContentType": data.get("content_type", "image/png")},
+            ExpiresIn=3600)
+        return _resp({"upload_url": url})
+
+def _get_logo_url():
+    """Get presigned download URL for logo."""
+    try:
+        s3_client.head_object(Bucket=S3_LOGO, Key="logo/company_logo.png")
+        url = s3_client.generate_presigned_url("get_object",
+            Params={"Bucket": S3_LOGO, "Key": "logo/company_logo.png"}, ExpiresIn=3600)
+        return _resp({"url": url, "exists": True})
+    except Exception:
+        return _resp({"url": "", "exists": False})
+
 
 # ─── Leaves ───
 
@@ -645,11 +751,15 @@ def _get_bank_details():
     })
 
 def _update_bank_details(data):
-    item = {"pk": "bank_details"}
-    for f in ["bank_name", "branch", "account_name",
-              "account_number", "ifsc", "pan", "gstin"]:
-        item[f] = data.get(f, "")
-    TABLE_SETTINGS.put_item(Item=item)
+    # Merge with existing to avoid losing fields
+    existing = TABLE_SETTINGS.get_item(Key={"pk": "bank_details"}).get("Item", {"pk": "bank_details"})
+    existing.update({"pk": "bank_details"})
+    for f in ["bank_name", "branch", "account_name", "account_number",
+              "ifsc", "pan", "gstin", "email", "phone", "address",
+              "company_tagline", "signatory_name", "signatory_title"]:
+        if f in data:
+            existing[f] = data[f]
+    TABLE_SETTINGS.put_item(Item=existing)
     return _resp({"message": "Saved"})
 
 
@@ -717,16 +827,32 @@ def lambda_handler(event, context):
             return _list_invoices(_qs(event))
         if path == "/invoices" and method == "POST":
             return _create_invoice(_body(event))
+        if re.match(r"^/invoices/.+/pdf$", path) and method == "POST":
+            inv_id = path.split("/")[-2]
+            return _generate_invoice_pdf(inv_id)
         if re.match(r"^/invoices/.+$", path) and method == "PUT":
             return _update_invoice(path.split("/")[-1], _body(event))
+        if re.match(r"^/invoices/.+$", path) and method == "DELETE":
+            return _delete_invoice(path.split("/")[-1])
 
         # ── Quotations ──
         if path == "/quotations" and method == "GET":
             return _list_quotations()
         if path == "/quotations" and method == "POST":
             return _create_quotation(_body(event))
+        if re.match(r"^/quotations/.+/pdf$", path) and method == "POST":
+            qtn_id = path.split("/")[-2]
+            return _generate_quotation_pdf(qtn_id)
         if re.match(r"^/quotations/.+$", path) and method == "PUT":
             return _update_quotation(path.split("/")[-1], _body(event))
+        if re.match(r"^/quotations/.+$", path) and method == "DELETE":
+            return _delete_quotation(path.split("/")[-1])
+
+        # ── Logo ──
+        if path == "/logo" and method == "GET":
+            return _get_logo_url()
+        if path == "/logo" and method == "POST":
+            return _upload_logo(_body(event))
 
         # ── Bank Details ──
         if path == "/bank-details" and method == "GET":

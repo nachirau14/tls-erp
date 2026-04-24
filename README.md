@@ -72,7 +72,9 @@ erp/
 ├── cloudformation.yaml                    ← full AWS stack (DynamoDB + Lambda + API GW + S3 + IAM)
 │
 ├── lambda_function/
-│   └── lambda_function.py                 ← Lambda handler – all API routes (777 lines)
+│   ├── lambda_function.py                 ← Lambda handler – all API routes
+│   ├── pdf_generator.py                   ← PDF generation (invoices & quotations)
+│   └── requirements.txt                   ← Lambda dependencies (reportlab, boto3)
 │
 ├── shared/
 │   ├── __init__.py
@@ -133,13 +135,26 @@ This gives you something like:
 
 ### Step 2 — Deploy Lambda Code
 
+The Lambda needs `reportlab` for PDF generation, so we use a layer or package it with dependencies:
+
 ```bash
 cd lambda_function/
-zip lambda_function.zip lambda_function.py
 
+# Install dependencies into a package directory
+pip install -r requirements.txt -t package/
+
+# Copy Lambda code into package
+cp lambda_function.py pdf_generator.py package/
+
+# Create zip from inside the package directory
+cd package/
+zip -r ../lambda_deploy.zip .
+cd ..
+
+# Deploy
 aws lambda update-function-code \
   --function-name erp-api \
-  --zip-file fileb://lambda_function.zip \
+  --zip-file fileb://lambda_deploy.zip \
   --region ap-south-1
 ```
 

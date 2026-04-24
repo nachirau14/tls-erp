@@ -198,17 +198,41 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "erp-leave-attachments-${AWS::AccountId}"
-      LifecycleConfiguration:
-        Rules:
-          - Id: DeleteOldAttachments
-            Status: Enabled
-            ExpirationInDays: 365
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins: ["*"]
             AllowedMethods: [GET, PUT]
             AllowedHeaders: ["*"]
-            MaxAge: 3600
+
+  QuotationsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "erp-quotations-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT, DELETE]
+            AllowedHeaders: ["*"]
+
+  InvoicesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "erp-invoices-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT, DELETE]
+            AllowedHeaders: ["*"]
+
+  LogoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "erp-assets-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT]
+            AllowedHeaders: ["*"]
 
   # ─── IAM Role ───
 
@@ -262,9 +286,17 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:GetObject
-                  - s3:GeneratePresignedUrl
+                  - s3:DeleteObject
+                  - s3:ListBucket
                 Resource:
                   - !Sub "${LeaveAttachmentsBucket.Arn}/*"
+                  - !Sub "${QuotationsBucket.Arn}/*"
+                  - !Sub "${InvoicesBucket.Arn}/*"
+                  - !Sub "${LogoBucket.Arn}/*"
+                  - !GetAtt LeaveAttachmentsBucket.Arn
+                  - !GetAtt QuotationsBucket.Arn
+                  - !GetAtt InvoicesBucket.Arn
+                  - !GetAtt LogoBucket.Arn
 
   # ─── Lambda Function ───
 
@@ -281,6 +313,9 @@ Resources:
         Variables:
           AWS_REGION_NAME: !Ref AWS::Region
           S3_BUCKET_NAME: !Ref LeaveAttachmentsBucket
+          S3_QUOTATIONS_BUCKET: !Ref QuotationsBucket
+          S3_INVOICES_BUCKET: !Ref InvoicesBucket
+          S3_LOGO_BUCKET: !Ref LogoBucket
       Code:
         ZipFile: |
           def lambda_handler(event, context):
@@ -334,5 +369,11 @@ Outputs:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
   LambdaFunctionName:
     Value: !Ref ErpLambdaFunction
-  S3BucketName:
+  S3LeavesBucket:
     Value: !Ref LeaveAttachmentsBucket
+  S3QuotationsBucket:
+    Value: !Ref QuotationsBucket
+  S3InvoicesBucket:
+    Value: !Ref InvoicesBucket
+  S3LogoBucket:
+    Value: !Ref LogoBucket

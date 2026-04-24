@@ -171,6 +171,14 @@ def update_invoice(inv_id, data):
     return _put(f"/invoices/{inv_id}", data)
 
 
+def delete_invoice(inv_id):
+    return _delete(f"/invoices/{inv_id}")
+
+
+def generate_invoice_pdf(inv_id):
+    return _post(f"/invoices/{inv_id}/pdf", {})
+
+
 # ─── Quotations ───
 
 def list_quotations():
@@ -183,6 +191,24 @@ def create_quotation(data):
 
 def update_quotation(qtn_id, data):
     return _put(f"/quotations/{qtn_id}", data)
+
+
+def delete_quotation(qtn_id):
+    return _delete(f"/quotations/{qtn_id}")
+
+
+def generate_quotation_pdf(qtn_id):
+    return _post(f"/quotations/{qtn_id}/pdf", {})
+
+
+# ─── Logo ───
+
+def get_logo_url():
+    return _get("/logo")
+
+
+def upload_logo(base64_data, content_type="image/png"):
+    return _post("/logo", {"base64": base64_data, "content_type": content_type})
 
 
 # ─── Bank Details ───
