@@ -305,14 +305,47 @@ def page_my_logs(user):
 
     pm = {p["id"]: p["name"] for p in projects}
     em = {e["id"]: e["name"] for e in employees}
+    
     if not logs:
         st.info("No logs yet.")
         return
 
-    st.metric("Total Hours",
-              f"{sum(float(l.get('hours', 0)) for l in logs):.1f}h")
+    # --- Filtering Logic ---
+    # Extract unique dates and employees from the fetched logs
+    unique_dates = sorted(list(set(l.get("date", "") for l in logs if l.get("date"))), reverse=True)
+    unique_emp_ids = list(set(l.get("employee_id") for l in logs if l.get("employee_id")))
+    
+    date_options = ["All"] + unique_dates
+    emp_options = ["All"] + [em.get(eid, f"Unknown ({eid})") for eid in unique_emp_ids]
+    
+    # Create a reverse mapping to get the employee ID from the selected name
+    emp_name_to_id = {em.get(eid, f"Unknown ({eid})"): eid for eid in unique_emp_ids}
 
-    sorted_logs = sorted(logs, key=lambda x: x.get("date", ""), reverse=True)
+    # Render filter dropdowns
+    c1, c2 = st.columns(2)
+    with c1:
+        selected_date = st.selectbox("Filter by Date", date_options)
+    with c2:
+        selected_emp = st.selectbox("Filter by Employee", emp_options)
+
+    # Apply filters to the logs list
+    filtered_logs = logs
+    if selected_date != "All":
+        filtered_logs = [l for l in filtered_logs if l.get("date") == selected_date]
+    if selected_emp != "All":
+        selected_eid = emp_name_to_id[selected_emp]
+        filtered_logs = [l for l in filtered_logs if l.get("employee_id") == selected_eid]
+
+    # --- Display Results ---
+    st.markdown("---")
+    st.metric("Total Hours",
+              f"{sum(float(l.get('hours', 0)) for l in filtered_logs):.1f}h")
+
+    if not filtered_logs:
+        st.info("No logs match the selected filters.")
+        return
+
+    sorted_logs = sorted(filtered_logs, key=lambda x: x.get("date", ""), reverse=True)
     for l in sorted_logs:
         log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
                      f"{pm.get(l.get('project_id'), '?')} · {float(l.get('hours', 0)):.1f}h")
