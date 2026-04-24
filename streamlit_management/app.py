@@ -500,6 +500,22 @@ def pg_time():
                          axis=None).format("{:.1f}"),
                          use_container_width=True)
 
+        # Delete individual logs
+        with st.expander("🗑️ Manage Individual Logs"):
+            for l in fl[:50]:
+                log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
+                             f"{pm.get(l.get('project_id'), '?')} · {float(l.get('hours', 0)):.1f}h")
+                col_t, col_d = st.columns([6, 1])
+                with col_t:
+                    st.markdown(f"**{log_label}** — _{l.get('comments', '')}_")
+                with col_d:
+                    if st.button("🗑️", key=f"dtl_{l.get('id', '')}"):
+                        try:
+                            api.delete_time_log(l["id"])
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
     with st.expander("➕ Log Time (Admin)"):
         with st.form("alog"):
             a, b = st.columns(2)
@@ -756,9 +772,15 @@ def pg_leaves_expenses():
                     ["pending", "approved", "rejected"],
                     index=["pending", "approved", "rejected"].index(lv.get("status", "pending")),
                     key=f"ls_{lv['id']}")
-                if new_status != lv.get("status"):
-                    if st.button("Update", key=f"lu_{lv['id']}"):
-                        api.update_leave(lv["id"], {"status": new_status})
+                col_u, col_d = st.columns([1, 1])
+                with col_u:
+                    if new_status != lv.get("status"):
+                        if st.button("Update Status", key=f"lu_{lv['id']}"):
+                            api.update_leave(lv["id"], {"status": new_status})
+                            st.rerun()
+                with col_d:
+                    if st.button("🗑️ Delete", key=f"dlv_{lv['id']}"):
+                        api.delete_leave(lv["id"])
                         st.rerun()
 
     with tab_e:
@@ -778,9 +800,15 @@ def pg_leaves_expenses():
                         ["pending", "approved", "rejected"],
                         index=["pending", "approved", "rejected"].index(exp.get("status", "pending")),
                         key=f"es_{exp['id']}")
-                    if new_status != exp.get("status"):
-                        if st.button("Update", key=f"eu_{exp['id']}"):
-                            api.update_expense(exp["id"], {"status": new_status})
+                    col_u, col_d = st.columns([1, 1])
+                    with col_u:
+                        if new_status != exp.get("status"):
+                            if st.button("Update Status", key=f"eu_{exp['id']}"):
+                                api.update_expense(exp["id"], {"status": new_status})
+                                st.rerun()
+                    with col_d:
+                        if st.button("🗑️ Delete", key=f"dex_{exp['id']}"):
+                            api.delete_expense(exp["id"])
                             st.rerun()
 
         # Expense summary by category

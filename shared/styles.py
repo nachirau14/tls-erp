@@ -278,10 +278,23 @@ hr {
     border-color: rgba(201,169,110,0.15) !important;
 }
 
-/* ── Section titles ── */
-h1, h2, h3 {
+/* ── Section titles (main content only) ── */
+.block-container h1,
+.block-container h2,
+.block-container h3 {
     font-family: 'Playfair Display', serif !important;
     color: #2c2825 !important;
+}
+/* Override for headers inside dark banners */
+.emp-header h1, .emp-header h2, .emp-header h3,
+.emp-header p {
+    color: #faf6f0 !important;
+}
+/* Sidebar headings */
+div[data-testid="stSidebar"] h1,
+div[data-testid="stSidebar"] h2,
+div[data-testid="stSidebar"] h3 {
+    color: #e8e4de !important;
 }
 
 /* ── Login card ── */
@@ -591,14 +604,27 @@ hr {
     border-color: rgba(201,169,110,0.12) !important;
 }
 
-/* ── Section titles ── */
-h1, h2, h3 {
+/* ── Section titles (main content only) ── */
+.block-container h1,
+.block-container h2,
+.block-container h3 {
     font-family: 'Playfair Display', serif !important;
     color: #2c2825 !important;
 }
-h3 {
+.block-container h3 {
     position: relative;
     padding-bottom: 0.5rem;
+}
+/* Override for headers inside dark banners */
+.mgmt-header h1, .mgmt-header h2, .mgmt-header h3,
+.mgmt-header p {
+    color: #faf6f0 !important;
+}
+/* Sidebar headings */
+div[data-testid="stSidebar"] h1,
+div[data-testid="stSidebar"] h2,
+div[data-testid="stSidebar"] h3 {
+    color: #e8e4de !important;
 }
 
 /* ── Login card ── */

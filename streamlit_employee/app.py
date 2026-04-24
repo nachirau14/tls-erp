@@ -211,6 +211,27 @@ def page_projects():
                 except Exception as e:
                     st.error(f"Error: {e}")
 
+            st.markdown("---")
+            st.markdown("**Edit Project Details:**")
+            with st.form(f"edit_proj_{proj['id']}"):
+                new_name = st.text_input("Project Name", value=proj.get("name", ""), key=f"pn_{proj['id']}")
+                new_client = st.text_input("Client Name", value=proj.get("client_name", ""), key=f"pcl_{proj['id']}")
+                if st.form_submit_button("Save Details"):
+                    try:
+                        api.update_project(proj["id"], {"name": new_name, "client_name": new_client})
+                        st.success("Project updated!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+            if st.button("🗑️ Delete Project", key=f"dp_{proj['id']}"):
+                try:
+                    api.delete_project(proj["id"])
+                    st.success("Deleted!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
 
 def page_log_time(user):
     st.markdown("### ⏱ Log Time")
@@ -277,26 +298,33 @@ def page_my_logs(user):
         logs = (api.list_time_logs(employee_id=emp_id)
                 if emp_id else api.list_time_logs())
         projects = api.list_projects()
+        employees = api.list_employees()
     except Exception as e:
         st.error(f"Error: {e}")
         return
 
     pm = {p["id"]: p["name"] for p in projects}
+    em = {e["id"]: e["name"] for e in employees}
     if not logs:
         st.info("No logs yet.")
         return
 
     st.metric("Total Hours",
-              f"{sum(l.get('hours', 0) for l in logs):.1f}h")
-    df = pd.DataFrame([{
-        "Date": l.get("date", ""),
-        "Project": pm.get(l.get("project_id"), "?"),
-        "Hours": l.get("hours", 0),
-        "Comments": l.get("comments", ""),
-    } for l in logs]).sort_values(
-        "Date", ascending=False
-    ).reset_index(drop=True)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+              f"{sum(float(l.get('hours', 0)) for l in logs):.1f}h")
+
+    sorted_logs = sorted(logs, key=lambda x: x.get("date", ""), reverse=True)
+    for l in sorted_logs:
+        log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
+                     f"{pm.get(l.get('project_id'), '?')} · {float(l.get('hours', 0)):.1f}h")
+        with st.expander(log_label):
+            st.markdown(f"**Comments:** {l.get('comments', '—')}")
+            if st.button("🗑️ Delete this log", key=f"dlog_{l['id']}"):
+                try:
+                    api.delete_time_log(l["id"])
+                    st.success("Deleted!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 
 def page_leaves(user):
@@ -351,16 +379,23 @@ def page_leaves(user):
 
     if leaves:
         status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
-        df = pd.DataFrame([{
-            "Status": status_icons.get(l.get("status", ""), "🔘") + " " + l.get("status", "").title(),
-            "Employee": emp_map.get(l.get("employee_id"), "?"),
-            "Type": l.get("leave_type", ""),
-            "From": l.get("start_date", ""),
-            "To": l.get("end_date", ""),
-            "Days": float(l.get("days", 0)),
-            "Reason": l.get("reason", ""),
-        } for l in leaves])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        for l in leaves:
+            icon = status_icons.get(l.get("status", ""), "🔘")
+            emp_name = emp_map.get(l.get("employee_id"), "?")
+            label = (f"{icon} {emp_name} · {l.get('leave_type', '')} · "
+                     f"{l.get('start_date', '')} to {l.get('end_date', '')} · "
+                     f"{float(l.get('days', 0)):.0f}d · {l.get('status', '').title()}")
+            with st.expander(label):
+                st.markdown(f"**Reason:** {l.get('reason', '—')}")
+                col_del, _ = st.columns([1, 4])
+                with col_del:
+                    if st.button("🗑️ Delete", key=f"dlv_{l['id']}"):
+                        try:
+                            api.delete_leave(l["id"])
+                            st.success("Deleted!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
     else:
         st.info("No leave records.")
 
@@ -422,16 +457,24 @@ def page_expenses(user):
 
     if expenses:
         status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
-        df = pd.DataFrame([{
-            "Status": status_icons.get(x.get("status", ""), "🔘") + " " + x.get("status", "").title(),
-            "Employee": emp_map.get(x.get("employee_id"), "?"),
-            "Date": x.get("date", ""),
-            "Category": x.get("category", ""),
-            "Amount (₹)": float(x.get("amount", 0)),
-            "Project": pm.get(x.get("project_id"), "—"),
-            "Description": x.get("description", ""),
-        } for x in expenses])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        for x in expenses:
+            icon = status_icons.get(x.get("status", ""), "🔘")
+            emp_name = emp_map.get(x.get("employee_id"), "?")
+            label = (f"{icon} {emp_name} · {x.get('category', '')} · "
+                     f"₹{float(x.get('amount', 0)):,.2f} · {x.get('date', '')} · "
+                     f"{x.get('status', '').title()}")
+            with st.expander(label):
+                st.markdown(f"**Description:** {x.get('description', '—')}")
+                st.markdown(f"**Project:** {pm.get(x.get('project_id'), '—')}")
+                col_del, _ = st.columns([1, 4])
+                with col_del:
+                    if st.button("🗑️ Delete", key=f"dex_{x['id']}"):
+                        try:
+                            api.delete_expense(x["id"])
+                            st.success("Deleted!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
     else:
         st.info("No expenses recorded.")
 
