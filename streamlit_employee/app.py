@@ -170,16 +170,13 @@ def page_projects():
                 name = st.text_input("Project Name *")
                 client = st.text_input("Client Name")
             with b:
-                cost = st.number_input("Total Receivable (₹)",
-                                       min_value=0.0, step=10000.0,
-                                       format="%.2f")
                 sd = st.date_input("Start Date", value=date.today())
             desc = st.text_area("Description", height=80)
             if st.form_submit_button("Create Project", type="primary",
                                      use_container_width=True):
                 if name:
                     try:
-                        api.create_project(name, client, cost,
+                        api.create_project(name, client, 0,
                                            sd.isoformat(), desc)
                         st.success(f"'{name}' created!")
                         st.rerun()
@@ -191,8 +188,7 @@ def page_projects():
         done = sum(1 for s in stages.values() if s == "Completed")
         pct = int(done / len(STAGES) * 100)
         with st.expander(
-            f"**{proj['name']}** — {proj.get('client_name','')} "
-            f"| {pct}% | ₹{float(proj.get('total_cost', 0)):,.2f}"
+            f"**{proj['name']}** — {proj.get('client_name','')} | {pct}%"
         ):
             st.progress(pct / 100)
             st.markdown("**Update Stages:**")
@@ -305,15 +301,14 @@ def page_my_logs(user):
 
 def page_leaves(user):
     st.markdown("### 🏖️ Leave Tracker")
-    emp_id = user.get("employee_id", "")
     try:
-        leaves = api.list_leaves(employee_id=emp_id) if emp_id else api.list_leaves()
+        leaves = api.list_leaves()
         employees = api.list_employees()
     except Exception as e:
         st.error(f"Error: {e}")
         return
 
-    emp_match = next((e for e in employees if str(e["id"]) == str(emp_id)), None) if emp_id else None
+    emp_map = {e["id"]: e["name"] for e in employees}
     LEAVE_TYPES = ["Casual Leave", "Sick Leave", "Earned Leave", "Comp Off", "Work From Home", "Half Day", "Other"]
 
     # Summary
@@ -330,16 +325,22 @@ def page_leaves(user):
         with st.form("apply_leave"):
             a, b = st.columns(2)
             with a:
+                if employees:
+                    emp_opts = {e["name"]: e["id"] for e in employees}
+                    sel_emp_name = st.selectbox("Employee *", list(emp_opts.keys()))
+                    sel_emp_id = emp_opts[sel_emp_name]
+                else:
+                    st.warning("No employees registered.")
+                    sel_emp_id = None
                 lt = st.selectbox("Leave Type *", LEAVE_TYPES)
-                sd = st.date_input("Start Date", value=date.today())
             with b:
-                days = st.number_input("Number of Days", min_value=0.5, max_value=30.0, step=0.5, value=1.0)
+                sd = st.date_input("Start Date", value=date.today())
                 ed = st.date_input("End Date", value=date.today())
+            days = st.number_input("Number of Days", min_value=0.5, max_value=30.0, step=0.5, value=1.0)
             reason = st.text_area("Reason", height=80)
             if st.form_submit_button("Apply", type="primary", use_container_width=True):
-                sel_emp_id = emp_match["id"] if emp_match else emp_id
                 if not sel_emp_id:
-                    st.error("No employee profile linked.")
+                    st.error("Select an employee.")
                 else:
                     try:
                         api.create_leave(sel_emp_id, sd.isoformat(), ed.isoformat(), lt, reason, days)
@@ -352,6 +353,7 @@ def page_leaves(user):
         status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
         df = pd.DataFrame([{
             "Status": status_icons.get(l.get("status", ""), "🔘") + " " + l.get("status", "").title(),
+            "Employee": emp_map.get(l.get("employee_id"), "?"),
             "Type": l.get("leave_type", ""),
             "From": l.get("start_date", ""),
             "To": l.get("end_date", ""),
@@ -365,16 +367,15 @@ def page_leaves(user):
 
 def page_expenses(user):
     st.markdown("### 💳 Expense Tracker")
-    emp_id = user.get("employee_id", "")
     try:
-        expenses = api.list_expenses(employee_id=emp_id) if emp_id else api.list_expenses()
+        expenses = api.list_expenses()
         employees = api.list_employees()
         projects = api.list_projects()
     except Exception as e:
         st.error(f"Error: {e}")
         return
 
-    emp_match = next((e for e in employees if str(e["id"]) == str(emp_id)), None) if emp_id else None
+    emp_map = {e["id"]: e["name"] for e in employees}
     CATEGORIES = ["Site Visit", "Travel / Flight", "Cab / Transport", "Food & Meals", "Office Supplies", "Printing / Plotting", "Software / License", "Other"]
     pm = {p["id"]: p["name"] for p in projects}
 
@@ -392,17 +393,23 @@ def page_expenses(user):
         with st.form("add_expense"):
             a, b = st.columns(2)
             with a:
+                if employees:
+                    emp_opts = {e["name"]: e["id"] for e in employees}
+                    sel_emp_name = st.selectbox("Employee *", list(emp_opts.keys()))
+                    sel_emp_id = emp_opts[sel_emp_name]
+                else:
+                    st.warning("No employees registered.")
+                    sel_emp_id = None
                 cat = st.selectbox("Category *", CATEGORIES)
-                amt = st.number_input("Amount (₹) *", min_value=0.0, step=100.0, format="%.2f")
             with b:
+                amt = st.number_input("Amount (₹) *", min_value=0.0, step=100.0, format="%.2f")
                 exp_date = st.date_input("Date", value=date.today())
-                proj_opts = {"None": ""} | {p["name"]: p["id"] for p in projects}
-                sel_proj = st.selectbox("Project (optional)", list(proj_opts.keys()))
+            proj_opts = {"None": ""} | {p["name"]: p["id"] for p in projects}
+            sel_proj = st.selectbox("Project (optional)", list(proj_opts.keys()))
             desc = st.text_area("Description", height=80, placeholder="e.g. Cab to site, flight to Mumbai...")
             if st.form_submit_button("Submit Expense", type="primary", use_container_width=True):
-                sel_emp_id = emp_match["id"] if emp_match else emp_id
                 if not sel_emp_id:
-                    st.error("No employee profile linked.")
+                    st.error("Select an employee.")
                 elif amt <= 0:
                     st.error("Enter a valid amount.")
                 else:
@@ -417,6 +424,7 @@ def page_expenses(user):
         status_icons = {"pending": "🟡", "approved": "✅", "rejected": "❌"}
         df = pd.DataFrame([{
             "Status": status_icons.get(x.get("status", ""), "🔘") + " " + x.get("status", "").title(),
+            "Employee": emp_map.get(x.get("employee_id"), "?"),
             "Date": x.get("date", ""),
             "Category": x.get("category", ""),
             "Amount (₹)": float(x.get("amount", 0)),
