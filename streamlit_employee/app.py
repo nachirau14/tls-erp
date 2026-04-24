@@ -16,32 +16,11 @@ from datetime import datetime, date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
 import api_client as api
 from api_client import ApiError
+from styles import get_employee_css
 
 st.set_page_config(page_title="Studio ERP – Employee", page_icon="⏱", layout="wide")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-.stApp { font-family: 'DM Sans', sans-serif; }
-.emp-header { background: linear-gradient(135deg, #1e1b4b, #312e81); color: white;
-    padding: 1.5rem 2rem; border-radius: 16px; margin-bottom: 1.5rem; }
-.emp-header h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
-.emp-header p { margin: 0.25rem 0 0; opacity: 0.7; font-size: 0.85rem; }
-.stat-card { background: white; border: 1px solid #e8e6f0; border-radius: 14px;
-    padding: 1.2rem 1.5rem; text-align: center; }
-.stat-card .label { font-size: 0.7rem; color: #94a3b8; text-transform: uppercase;
-    letter-spacing: 1px; font-weight: 600; }
-.stat-card .value { font-size: 1.8rem; font-weight: 700; color: #1e1b4b; margin-top: 0.2rem; }
-.stage-badge { display: inline-block; padding: 3px 12px; border-radius: 20px;
-    font-size: 0.72rem; font-weight: 600; margin: 2px; }
-.stage-not-started { background: #f1f5f9; color: #94a3b8; }
-.stage-in-progress { background: #fef3c7; color: #d97706; }
-.stage-review { background: #dbeafe; color: #2563eb; }
-.stage-completed { background: #d1fae5; color: #059669; }
-div[data-testid="stSidebar"] { background: #f8f7fc; }
-.block-container { padding-top: 2rem; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(get_employee_css(), unsafe_allow_html=True)
 
 STAGES = ["2D Plans","End Views","Elevations","3D Modeling",
           "Rendering","Presentation","Site","Checking"]
@@ -56,9 +35,9 @@ if "logged_in" not in st.session_state:
 def show_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        st.markdown("""<div style="text-align:center; margin-top:3rem;">
-            <h1 style="font-size:2.2rem; color:#1e1b4b;">⏱ Employee Portal</h1>
-            <p style="color:#64748b; margin-bottom:2rem;">Architectural Studio ERP</p>
+        st.markdown("""<div class="login-card">
+            <div class="login-title">⏱ Employee Portal</div>
+            <div class="login-subtitle">Architectural Studio ERP</div>
         </div>""", unsafe_allow_html=True)
 
         with st.form("login"):

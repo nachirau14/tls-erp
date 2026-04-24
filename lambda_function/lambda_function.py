@@ -31,9 +31,29 @@ TABLE_INVOICES   = dynamodb.Table("erp_invoices")
 TABLE_QUOTATIONS = dynamodb.Table("erp_quotations")
 TABLE_SETTINGS   = dynamodb.Table("erp_settings")
 TABLE_COUNTERS   = dynamodb.Table("erp_counters")
-TABLE_LEAVES     = dynamodb.Table("erp_leaves")
-TABLE_EXPENSES   = dynamodb.Table("erp_expenses")
-TABLE_HOLIDAYS   = dynamodb.Table("erp_holidays")
+
+# New tables - referenced lazily in case CloudFormation hasn't been updated yet
+_TABLE_LEAVES = None
+_TABLE_EXPENSES = None
+_TABLE_HOLIDAYS = None
+
+def _get_table_leaves():
+    global _TABLE_LEAVES
+    if _TABLE_LEAVES is None:
+        _TABLE_LEAVES = dynamodb.Table("erp_leaves")
+    return _TABLE_LEAVES
+
+def _get_table_expenses():
+    global _TABLE_EXPENSES
+    if _TABLE_EXPENSES is None:
+        _TABLE_EXPENSES = dynamodb.Table("erp_expenses")
+    return _TABLE_EXPENSES
+
+def _get_table_holidays():
+    global _TABLE_HOLIDAYS
+    if _TABLE_HOLIDAYS is None:
+        _TABLE_HOLIDAYS = dynamodb.Table("erp_holidays")
+    return _TABLE_HOLIDAYS
 
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME", "erp-leave-attachments")
 s3_client = boto3.client("s3", region_name=REGION)
@@ -115,11 +135,11 @@ def _get_next_number(prefix):
     resp = TABLE_COUNTERS.update_item(
         Key={"pk": prefix},
         UpdateExpression="SET #v = if_not_exists(#v, :zero) + :one",
-        ExpressionAttributeNames={"#v": "counter_value"},
+        ExpressionAttributeNames={"#v": "value"},
         ExpressionAttributeValues={":zero": 0, ":one": 1},
         ReturnValues="UPDATED_NEW",
     )
-    return int(resp["Attributes"]["counter_value"])
+    return int(resp["Attributes"]["value"])
 
 def _scan_all(table):
     """Full table scan with pagination."""
@@ -467,7 +487,7 @@ def _create_leave(data):
     if err:
         return _err(err)
     pk = _uid()
-    TABLE_LEAVES.put_item(Item={
+    _get_table_leaves().put_item(Item={
         "pk": pk,
         "employee_id": str(data["employee_id"]),
         "start_date": data["start_date"],
@@ -483,18 +503,18 @@ def _create_leave(data):
 def _list_leaves(params):
     emp_id = params.get("employee_id")
     if emp_id:
-        resp = TABLE_LEAVES.query(
+        resp = _get_table_leaves().query(
             IndexName="employee-index",
             KeyConditionExpression=Key("employee_id").eq(str(emp_id)),
         )
         items = resp.get("Items", [])
     else:
-        items = _scan_all(TABLE_LEAVES)
+        items = _scan_all(_get_table_leaves())
     items.sort(key=lambda x: x.get("start_date", ""), reverse=True)
     return _resp([{**item, "id": item["pk"]} for item in items])
 
 def _update_leave(leave_id, data):
-    item = TABLE_LEAVES.get_item(Key={"pk": leave_id}).get("Item")
+    item = _get_table_leaves().get_item(Key={"pk": leave_id}).get("Item")
     if not item:
         return _err("Not found", 404)
     for f in ["status", "reason", "start_date", "end_date", "leave_type"]:
@@ -502,11 +522,11 @@ def _update_leave(leave_id, data):
             item[f] = data[f]
     if "days" in data:
         item["days"] = _dec(float(data["days"]))
-    TABLE_LEAVES.put_item(Item=item)
+    _get_table_leaves().put_item(Item=item)
     return _resp({"message": "Leave updated"})
 
 def _delete_leave(leave_id):
-    TABLE_LEAVES.delete_item(Key={"pk": leave_id})
+    _get_table_leaves().delete_item(Key={"pk": leave_id})
     return _resp({"message": "Deleted"})
 
 def _get_leave_upload_url(data):
@@ -529,7 +549,7 @@ def _create_expense(data):
     if err:
         return _err(err)
     pk = _uid()
-    TABLE_EXPENSES.put_item(Item={
+    _get_table_expenses().put_item(Item={
         "pk": pk,
         "employee_id": str(data["employee_id"]),
         "date": data["date"],
@@ -545,18 +565,18 @@ def _create_expense(data):
 def _list_expenses(params):
     emp_id = params.get("employee_id")
     if emp_id:
-        resp = TABLE_EXPENSES.query(
+        resp = _get_table_expenses().query(
             IndexName="employee-index",
             KeyConditionExpression=Key("employee_id").eq(str(emp_id)),
         )
         items = resp.get("Items", [])
     else:
-        items = _scan_all(TABLE_EXPENSES)
+        items = _scan_all(_get_table_expenses())
     items.sort(key=lambda x: x.get("date", ""), reverse=True)
     return _resp([{**item, "id": item["pk"]} for item in items])
 
 def _update_expense(exp_id, data):
-    item = TABLE_EXPENSES.get_item(Key={"pk": exp_id}).get("Item")
+    item = _get_table_expenses().get_item(Key={"pk": exp_id}).get("Item")
     if not item:
         return _err("Not found", 404)
     for f in ["status", "description", "category", "date", "project_id"]:
@@ -564,11 +584,11 @@ def _update_expense(exp_id, data):
             item[f] = data[f]
     if "amount" in data:
         item["amount"] = _dec(float(data["amount"]))
-    TABLE_EXPENSES.put_item(Item=item)
+    _get_table_expenses().put_item(Item=item)
     return _resp({"message": "Expense updated"})
 
 def _delete_expense(exp_id):
-    TABLE_EXPENSES.delete_item(Key={"pk": exp_id})
+    _get_table_expenses().delete_item(Key={"pk": exp_id})
     return _resp({"message": "Deleted"})
 
 
@@ -579,7 +599,7 @@ def _create_holiday(data):
     if err:
         return _err(err)
     pk = _uid()
-    TABLE_HOLIDAYS.put_item(Item={
+    _get_table_holidays().put_item(Item={
         "pk": pk,
         "date": data["date"],
         "name": data["name"],
@@ -590,7 +610,7 @@ def _create_holiday(data):
     return _resp({"message": "Holiday added", "id": pk})
 
 def _list_holidays(params):
-    items = _scan_all(TABLE_HOLIDAYS)
+    items = _scan_all(_get_table_holidays())
     year = params.get("year")
     if year:
         items = [i for i in items if i.get("year") == year]
@@ -598,17 +618,17 @@ def _list_holidays(params):
     return _resp([{**item, "id": item["pk"]} for item in items])
 
 def _update_holiday(hol_id, data):
-    item = TABLE_HOLIDAYS.get_item(Key={"pk": hol_id}).get("Item")
+    item = _get_table_holidays().get_item(Key={"pk": hol_id}).get("Item")
     if not item:
         return _err("Not found", 404)
     for f in ["date", "name", "year", "optional"]:
         if f in data:
             item[f] = data[f]
-    TABLE_HOLIDAYS.put_item(Item=item)
+    _get_table_holidays().put_item(Item=item)
     return _resp({"message": "Holiday updated"})
 
 def _delete_holiday(hol_id):
-    TABLE_HOLIDAYS.delete_item(Key={"pk": hol_id})
+    _get_table_holidays().delete_item(Key={"pk": hol_id})
     return _resp({"message": "Deleted"})
 
 

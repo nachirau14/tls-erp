@@ -13,28 +13,12 @@ from datetime import datetime, date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
 import api_client as api
 from api_client import ApiError
+from styles import get_management_css
 
 st.set_page_config(page_title="Studio ERP – Management", page_icon="🏛",
                    layout="wide")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-.stApp { font-family: 'DM Sans', sans-serif; }
-.mgmt-header { background: linear-gradient(135deg, #0f0a2e 0%, #1e1b4b 50%, #312e81 100%);
-    color: white; padding: 1.8rem 2rem; border-radius: 16px; margin-bottom: 1.5rem; }
-.mgmt-header h1 { margin: 0; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.5px; }
-.mgmt-header p { margin: 0.3rem 0 0; opacity: 0.7; font-size: 0.85rem; }
-.stat-card { background: white; border: 1px solid #e8e6f0; border-radius: 14px;
-    padding: 1.2rem 1.5rem; text-align: center; }
-.stat-card .label { font-size: 0.7rem; color: #94a3b8; text-transform: uppercase;
-    letter-spacing: 1px; font-weight: 600; }
-.stat-card .value { font-size: 1.7rem; font-weight: 700; color: #1e1b4b; margin-top: 0.2rem; }
-div[data-testid="stSidebar"] { background: #0f0a2e; }
-div[data-testid="stSidebar"] * { color: #c7d2fe !important; }
-.block-container { padding-top: 2rem; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(get_management_css(), unsafe_allow_html=True)
 
 STAGES = ["2D Plans", "End Views", "Elevations", "3D Modeling",
           "Rendering", "Presentation", "Site", "Checking"]
@@ -54,9 +38,9 @@ def inr(n): return f"₹{fmt(float(n))}"
 def show_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        st.markdown("""<div style="text-align:center; margin-top:3rem;">
-            <h1 style="font-size:2.2rem; color:#1e1b4b;">🏛 Management Portal</h1>
-            <p style="color:#64748b; margin-bottom:2rem;">Architectural Studio ERP – Admin Access</p>
+        st.markdown("""<div class="login-card">
+            <div class="login-title">🏛 Management Portal</div>
+            <div class="login-subtitle">Architectural Studio ERP</div>
         </div>""", unsafe_allow_html=True)
 
         with st.form("login"):
