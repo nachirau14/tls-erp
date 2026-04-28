@@ -459,12 +459,19 @@ def pg_quotations():
 
 # ═══ PROJECTS ═══
 def pg_projects():
-    st.markdown("### 📁 Projects & Stages")
+    st.markdown("### 📁 Projects & Tasks")
     try:
         projects = api.list_projects()
+        employees = api.list_employees()
     except Exception as e:
         st.error(f"Error: {e}")
         return
+
+    emp_names = ["Unassigned"] + [e["name"] for e in employees]
+
+    def _uid_short():
+        import uuid
+        return str(uuid.uuid4())[:6]
 
     with st.expander("➕ Create New Project"):
         with st.form("new_proj"):
@@ -481,41 +488,111 @@ def pg_projects():
                                      use_container_width=True):
                 if pn:
                     try:
-                        api.create_project(pn, pc, pt, pd_.isoformat(),
-                                           pdesc)
+                        api.create_project(pn, pc, pt, pd_.isoformat(), pdesc)
                         st.success(f"'{pn}' created!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
 
     for proj in projects:
-        stages = proj.get("stages", {})
-        done = sum(1 for s in stages.values() if s == "Completed")
-        pct = int(done / len(STAGES) * 100)
+        tasks = proj.get("tasks", [])
+        total_items = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+        done_items = (sum(1 for t in tasks if t.get("status") == "Completed") +
+                      sum(1 for t in tasks for s in t.get("subtasks", []) if s.get("status") == "Completed"))
+        pct = int(done_items / total_items * 100) if total_items > 0 else 0
+
         with st.expander(
             f"**{proj['name']}** — {proj.get('client_name', '')} | "
             f"{pct}% | {inr(proj.get('total_cost', 0))}"
         ):
             st.progress(pct / 100)
-            new_stages = {}
-            cols = st.columns(4)
-            for idx, sn in enumerate(STAGES):
-                with cols[idx % 4]:
-                    cur = stages.get(sn, "Not Started")
-                    new_stages[sn] = st.selectbox(
-                        sn, STATUSES,
-                        index=(STATUSES.index(cur)
-                               if cur in STATUSES else 0),
-                        key=f"ms_{proj['id']}_{sn}",
-                    )
-            a, b = st.columns([3, 1])
-            with a:
-                if st.button("💾 Save", key=f"sv_{proj['id']}"):
-                    api.update_project(proj["id"], {"stages": new_stages})
-                    st.success("Updated!")
+
+            # ── Dynamic tasks with subtasks ──
+            updated_tasks = []
+            for tidx, task in enumerate(tasks):
+                st.markdown("---")
+                tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
+                with tc1:
+                    t_name = st.text_input("Task", value=task.get("name", ""),
+                        key=f"mtn_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc2:
+                    t_status = st.selectbox("Status", STATUSES,
+                        index=STATUSES.index(task.get("status", "Not Started"))
+                              if task.get("status") in STATUSES else 0,
+                        key=f"mts_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc3:
+                    cur_a = task.get("assigned_to", "Unassigned") or "Unassigned"
+                    t_assigned = st.selectbox("Assign", emp_names,
+                        index=emp_names.index(cur_a) if cur_a in emp_names else 0,
+                        key=f"mta_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc4:
+                    t_remove = st.checkbox("🗑️", key=f"mtr_{proj['id']}_{tidx}")
+
+                # Subtasks
+                updated_subtasks = []
+                for sidx, sub in enumerate(task.get("subtasks", [])):
+                    sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
+                    with sc1:
+                        s_name = st.text_input("↳ Sub", value=sub.get("name", ""),
+                            key=f"msn_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc2:
+                        s_status = st.selectbox("St", STATUSES,
+                            index=STATUSES.index(sub.get("status", "Not Started"))
+                                  if sub.get("status") in STATUSES else 0,
+                            key=f"mss_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc3:
+                        s_cur = sub.get("assigned_to", "Unassigned") or "Unassigned"
+                        s_assigned = st.selectbox("As", emp_names,
+                            index=emp_names.index(s_cur) if s_cur in emp_names else 0,
+                            key=f"msa_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc4:
+                        s_remove = st.checkbox("🗑️", key=f"msr_{proj['id']}_{tidx}_{sidx}")
+
+                    if not s_remove:
+                        updated_subtasks.append({
+                            "id": sub.get("id", f"s{tidx}_{sidx}"),
+                            "name": s_name, "status": s_status,
+                            "assigned_to": "" if s_assigned == "Unassigned" else s_assigned,
+                        })
+
+                if not t_remove:
+                    updated_tasks.append({
+                        "id": task.get("id", f"t{tidx+1}"),
+                        "name": t_name, "status": t_status,
+                        "assigned_to": "" if t_assigned == "Unassigned" else t_assigned,
+                        "subtasks": updated_subtasks,
+                    })
+
+            # Add buttons
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                if st.button("➕ Add Task", key=f"mat_{proj['id']}"):
+                    updated_tasks.append({"id": f"t_{_uid_short()}", "name": "New Task",
+                        "status": "Not Started", "assigned_to": "", "subtasks": []})
+                    api.update_project(proj["id"], {"tasks": updated_tasks})
                     st.rerun()
-            with b:
-                if st.button("🗑️ Delete", key=f"dl_{proj['id']}"):
+            with ac2:
+                if tasks:
+                    add_to = st.selectbox("Add subtask to:",
+                        [t.get("name", f"Task {i+1}") for i, t in enumerate(tasks)],
+                        key=f"mast_{proj['id']}")
+                    if st.button("➕ Add Subtask", key=f"mas_{proj['id']}"):
+                        ti = next((i for i, t in enumerate(updated_tasks) if t["name"] == add_to), 0)
+                        updated_tasks[ti]["subtasks"].append({
+                            "id": f"s_{_uid_short()}", "name": "New Subtask",
+                            "status": "Not Started", "assigned_to": ""})
+                        api.update_project(proj["id"], {"tasks": updated_tasks})
+                        st.rerun()
+
+            st.markdown("---")
+            sb1, sb2 = st.columns([3, 1])
+            with sb1:
+                if st.button("💾 Save All", key=f"msv_{proj['id']}", type="primary"):
+                    api.update_project(proj["id"], {"tasks": updated_tasks})
+                    st.success("Saved!")
+                    st.rerun()
+            with sb2:
+                if st.button("🗑️ Delete Project", key=f"mdl_{proj['id']}"):
                     api.delete_project(proj["id"])
                     st.rerun()
 

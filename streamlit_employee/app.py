@@ -26,6 +26,10 @@ STAGES = ["2D Plans","End Views","Elevations","3D Modeling",
           "Rendering","Presentation","Site","Checking"]
 STATUSES = ["Not Started","In Progress","Review","Completed"]
 
+def _uid_short():
+    import uuid
+    return str(uuid.uuid4())[:6]
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user = None
@@ -183,43 +187,126 @@ def page_projects():
                     except Exception as e:
                         st.error(f"Error: {e}")
 
+    try:
+        employees = api.list_employees()
+    except Exception:
+        employees = []
+    emp_names = ["Unassigned"] + [e["name"] for e in employees]
+
     for proj in projects:
-        stages = proj.get("stages", {})
-        done = sum(1 for s in stages.values() if s == "Completed")
-        pct = int(done / len(STAGES) * 100)
-        with st.expander(
-            f"**{proj['name']}** — {proj.get('client_name','')} | {pct}%"
-        ):
+        tasks = proj.get("tasks", [])
+        total_items = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+        done_items = (sum(1 for t in tasks if t.get("status") == "Completed") +
+                      sum(1 for t in tasks for st_ in t.get("subtasks", []) if st_.get("status") == "Completed"))
+        pct = int(done_items / total_items * 100) if total_items > 0 else 0
+
+        with st.expander(f"**{proj['name']}** — {proj.get('client_name', '')} | {pct}%"):
             st.progress(pct / 100)
-            st.markdown("**Update Stages:**")
-            new_stages = {}
-            cols = st.columns(4)
-            for idx, sn in enumerate(STAGES):
-                with cols[idx % 4]:
-                    cur = stages.get(sn, "Not Started")
-                    new_stages[sn] = st.selectbox(
-                        sn, STATUSES,
-                        index=(STATUSES.index(cur)
-                               if cur in STATUSES else 0),
-                        key=f"s_{proj['id']}_{sn}",
-                    )
-            if st.button("💾 Save Stages", key=f"sv_{proj['id']}"):
+
+            # ── Task list with subtasks ──
+            updated_tasks = []
+            for tidx, task in enumerate(tasks):
+                st.markdown(f"---")
+                tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
+                with tc1:
+                    t_name = st.text_input("Task", value=task.get("name", ""),
+                        key=f"tn_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc2:
+                    t_status = st.selectbox("Status", STATUSES,
+                        index=STATUSES.index(task.get("status", "Not Started"))
+                              if task.get("status") in STATUSES else 0,
+                        key=f"ts_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc3:
+                    cur_assigned = task.get("assigned_to", "Unassigned") or "Unassigned"
+                    t_assigned = st.selectbox("Assign", emp_names,
+                        index=emp_names.index(cur_assigned) if cur_assigned in emp_names else 0,
+                        key=f"ta_{proj['id']}_{tidx}", label_visibility="collapsed")
+                with tc4:
+                    t_remove = st.checkbox("🗑️", key=f"tr_{proj['id']}_{tidx}")
+
+                # Subtasks
+                updated_subtasks = []
+                for sidx, sub in enumerate(task.get("subtasks", [])):
+                    sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
+                    with sc1:
+                        s_name = st.text_input("↳ Subtask", value=sub.get("name", ""),
+                            key=f"sn_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc2:
+                        s_status = st.selectbox("Status", STATUSES,
+                            index=STATUSES.index(sub.get("status", "Not Started"))
+                                  if sub.get("status") in STATUSES else 0,
+                            key=f"ss_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc3:
+                        s_cur = sub.get("assigned_to", "Unassigned") or "Unassigned"
+                        s_assigned = st.selectbox("Assign", emp_names,
+                            index=emp_names.index(s_cur) if s_cur in emp_names else 0,
+                            key=f"sa_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
+                    with sc4:
+                        s_remove = st.checkbox("🗑️", key=f"sr_{proj['id']}_{tidx}_{sidx}")
+
+                    if not s_remove:
+                        updated_subtasks.append({
+                            "id": sub.get("id", f"s{tidx}_{sidx}"),
+                            "name": s_name, "status": s_status,
+                            "assigned_to": "" if s_assigned == "Unassigned" else s_assigned,
+                        })
+
+                if not t_remove:
+                    updated_tasks.append({
+                        "id": task.get("id", f"t{tidx+1}"),
+                        "name": t_name, "status": t_status,
+                        "assigned_to": "" if t_assigned == "Unassigned" else t_assigned,
+                        "subtasks": updated_subtasks,
+                    })
+
+            # Add task / subtask buttons
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                if st.button("➕ Add Task", key=f"at_{proj['id']}"):
+                    new_id = f"t{len(tasks)+1}_{_uid_short()}"
+                    updated_tasks.append({"id": new_id, "name": "New Task",
+                        "status": "Not Started", "assigned_to": "", "subtasks": []})
+                    try:
+                        api.update_project(proj["id"], {"tasks": updated_tasks})
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            with ac2:
+                if tasks:
+                    add_sub_to = st.selectbox("Add subtask to:",
+                        [t.get("name", f"Task {i+1}") for i, t in enumerate(tasks)],
+                        key=f"ast_sel_{proj['id']}")
+                    if st.button("➕ Add Subtask", key=f"as_{proj['id']}"):
+                        tidx_target = next((i for i, t in enumerate(updated_tasks)
+                            if t["name"] == add_sub_to), 0)
+                        new_sid = f"s{tidx_target}_{len(updated_tasks[tidx_target]['subtasks'])+1}"
+                        updated_tasks[tidx_target]["subtasks"].append({
+                            "id": new_sid, "name": "New Subtask",
+                            "status": "Not Started", "assigned_to": ""})
+                        try:
+                            api.update_project(proj["id"], {"tasks": updated_tasks})
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+            st.markdown("---")
+            if st.button("💾 Save All Changes", key=f"sv_{proj['id']}", type="primary"):
                 try:
-                    api.update_project(proj["id"], {"stages": new_stages})
-                    st.success("Updated!")
+                    api.update_project(proj["id"], {"tasks": updated_tasks})
+                    st.success("Saved!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
+            # Edit project details
             st.markdown("---")
-            st.markdown("**Edit Project Details:**")
             with st.form(f"edit_proj_{proj['id']}"):
                 new_name = st.text_input("Project Name", value=proj.get("name", ""), key=f"pn_{proj['id']}")
                 new_client = st.text_input("Client Name", value=proj.get("client_name", ""), key=f"pcl_{proj['id']}")
                 if st.form_submit_button("Save Details"):
                     try:
                         api.update_project(proj["id"], {"name": new_name, "client_name": new_client})
-                        st.success("Project updated!")
+                        st.success("Updated!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -293,10 +380,8 @@ def page_log_time(user):
 
 def page_my_logs(user):
     st.markdown("### 📋 My Time Logs")
-    emp_id = user.get("employee_id", "")
     try:
-        logs = (api.list_time_logs(employee_id=emp_id)
-                if emp_id else api.list_time_logs())
+        logs = api.list_time_logs()
         projects = api.list_projects()
         employees = api.list_employees()
     except Exception as e:
@@ -305,14 +390,41 @@ def page_my_logs(user):
 
     pm = {p["id"]: p["name"] for p in projects}
     em = {e["id"]: e["name"] for e in employees}
-    if not logs:
-        st.info("No logs yet.")
+
+    # ── Filters ──
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        sel_emp = st.selectbox("Filter Employee", ["All"] + [e["name"] for e in employees])
+    with f2:
+        sel_proj = st.selectbox("Filter Project", ["All"] + [p["name"] for p in projects])
+    with f3:
+        date_range = st.date_input("Date Range", value=[], key="date_filter")
+
+    filtered = logs
+    if sel_emp != "All":
+        eid = next((e["id"] for e in employees if e["name"] == sel_emp), None)
+        if eid:
+            filtered = [l for l in filtered if str(l.get("employee_id")) == str(eid)]
+    if sel_proj != "All":
+        pid = next((p["id"] for p in projects if p["name"] == sel_proj), None)
+        if pid:
+            filtered = [l for l in filtered if str(l.get("project_id")) == str(pid)]
+    if date_range:
+        if len(date_range) == 2:
+            start_d, end_d = date_range
+            filtered = [l for l in filtered
+                        if start_d.isoformat() <= l.get("date", "") <= end_d.isoformat()]
+        elif len(date_range) == 1:
+            filtered = [l for l in filtered if l.get("date", "") == date_range[0].isoformat()]
+
+    if not filtered:
+        st.info("No logs found for the selected filters.")
         return
 
     st.metric("Total Hours",
-              f"{sum(float(l.get('hours', 0)) for l in logs):.1f}h")
+              f"{sum(float(l.get('hours', 0)) for l in filtered):.1f}h")
 
-    sorted_logs = sorted(logs, key=lambda x: x.get("date", ""), reverse=True)
+    sorted_logs = sorted(filtered, key=lambda x: x.get("date", ""), reverse=True)
     for l in sorted_logs:
         log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
                      f"{pm.get(l.get('project_id'), '?')} · {float(l.get('hours', 0)):.1f}h")

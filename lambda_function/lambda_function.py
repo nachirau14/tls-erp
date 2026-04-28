@@ -292,10 +292,26 @@ def _update_employee(emp_id, data):
 
 # ─── Projects ───
 
+# Default tasks that pre-populate new projects
+DEFAULT_TASKS = [
+    {"id": "t1", "name": "2D Plans", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t2", "name": "End Views", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t3", "name": "Elevations", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t4", "name": "3D Modeling", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t5", "name": "Rendering", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t6", "name": "Presentation", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t7", "name": "Site", "status": "Not Started", "assigned_to": "", "subtasks": []},
+    {"id": "t8", "name": "Checking", "status": "Not Started", "assigned_to": "", "subtasks": []},
+]
+
 def _create_project(data):
     err = _require(data, ["name"])
     if err:
         return _err(err)
+    # Support both old-style stages and new tasks format
+    import copy
+    tasks = data.get("tasks", copy.deepcopy(DEFAULT_TASKS))
+    # Also keep backward-compatible stages dict
     stages = {s: "Not Started" for s in PROJECT_STAGES}
     pk = _uid()
     TABLE_PROJECTS.put_item(Item={
@@ -305,13 +321,27 @@ def _create_project(data):
         "start_date": data.get("start_date", _now()[:10]),
         "status": "active",
         "description": data.get("description", ""),
-        "stages": stages, "created_at": _now(),
+        "stages": stages,
+        "tasks": tasks,
+        "created_at": _now(),
     })
     return _resp({"message": "Project created", "id": pk})
 
 def _list_projects():
     items = _scan_all(TABLE_PROJECTS)
-    return _resp([{**item, "id": item["pk"]} for item in items])
+    result = []
+    for item in items:
+        d = {**item, "id": item["pk"]}
+        # Ensure tasks field exists (backward compat with old projects)
+        if "tasks" not in d:
+            stages = d.get("stages", {})
+            d["tasks"] = [
+                {"id": f"t{i+1}", "name": s, "status": stages.get(s, "Not Started"),
+                 "assigned_to": "", "subtasks": []}
+                for i, s in enumerate(PROJECT_STAGES)
+            ]
+        result.append(d)
+    return _resp(result)
 
 def _update_project(proj_id, data):
     item = TABLE_PROJECTS.get_item(Key={"pk": proj_id}).get("Item")
@@ -324,6 +354,13 @@ def _update_project(proj_id, data):
         item["total_cost"] = _dec(float(data["total_cost"]))
     if "stages" in data:
         item["stages"] = data["stages"]
+    if "tasks" in data:
+        item["tasks"] = data["tasks"]
+        # Also sync stages dict for backward compatibility
+        stages = {}
+        for t in data["tasks"]:
+            stages[t["name"]] = t.get("status", "Not Started")
+        item["stages"] = stages
     TABLE_PROJECTS.put_item(Item=item)
     return _resp({"message": "Updated"})
 
