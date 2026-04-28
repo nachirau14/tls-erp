@@ -337,11 +337,32 @@ def page_log_time(user):
                        if str(e["id"]) == str(emp_id)), None)
                  if emp_id else None)
 
+    # Project selection OUTSIDE form so task list updates dynamically
+    proj_opts = {p["name"]: p["id"] for p in projects}
+    sel_proj = st.selectbox("Project *", list(proj_opts.keys()), key="lt_proj")
+    sel_proj_id = proj_opts[sel_proj]
+
+    # Build task/subtask options from selected project
+    sel_project_obj = next((p for p in projects if p["id"] == sel_proj_id), None)
+    task_options = ["— No specific task —"]
+    task_map = {}  # display_name -> (task_idx, subtask_idx or None)
+    if sel_project_obj:
+        tasks = sel_project_obj.get("tasks", [])
+        for tidx, task in enumerate(tasks):
+            t_name = task.get("name", f"Task {tidx+1}")
+            label = f"📋 {t_name}"
+            task_options.append(label)
+            task_map[label] = (tidx, None)
+            for sidx, sub in enumerate(task.get("subtasks", [])):
+                s_name = sub.get("name", f"Subtask {sidx+1}")
+                s_label = f"    ↳ {s_name}"
+                task_options.append(s_label)
+                task_map[s_label] = (tidx, sidx)
+
     with st.form("log_time"):
         a, b = st.columns(2)
         with a:
-            proj_opts = {p["name"]: p["id"] for p in projects}
-            sel_proj = st.selectbox("Project *", list(proj_opts.keys()))
+            sel_task_label = st.selectbox("Task / Subtask", task_options)
             if emp_match:
                 st.text_input("Employee", value=emp_match["name"],
                               disabled=True)
@@ -368,11 +389,46 @@ def page_log_time(user):
                 st.error("Describe your work.")
             else:
                 try:
+                    # Determine task name for the time log
+                    task_name = ""
+                    if sel_task_label in task_map:
+                        tidx, sidx = task_map[sel_task_label]
+                        tasks = sel_project_obj.get("tasks", [])
+                        if sidx is not None:
+                            task_name = tasks[tidx]["subtasks"][sidx].get("name", "")
+                        else:
+                            task_name = tasks[tidx].get("name", "")
+
                     api.create_time_log(
-                        sel_emp_id, proj_opts[sel_proj],
+                        sel_emp_id, sel_proj_id,
                         hours, log_date.isoformat(), comments,
+                        task_name=task_name,
                     )
-                    st.success(f"✅ Logged {hours}h on {sel_proj}")
+
+                    # Auto-assign task if unassigned/not started
+                    if sel_task_label in task_map and sel_project_obj:
+                        tidx, sidx = task_map[sel_task_label]
+                        tasks = sel_project_obj.get("tasks", [])
+                        emp_name = emp_match["name"] if emp_match else next(
+                            (e["name"] for e in employees if str(e["id"]) == str(sel_emp_id)), "")
+                        changed = False
+                        if sidx is not None:
+                            sub = tasks[tidx]["subtasks"][sidx]
+                            if sub.get("status") in ("Not Started", "") or not sub.get("assigned_to"):
+                                tasks[tidx]["subtasks"][sidx]["status"] = "In Progress"
+                                tasks[tidx]["subtasks"][sidx]["assigned_to"] = emp_name
+                                changed = True
+                        else:
+                            t = tasks[tidx]
+                            if t.get("status") in ("Not Started", "") or not t.get("assigned_to"):
+                                tasks[tidx]["status"] = "In Progress"
+                                tasks[tidx]["assigned_to"] = emp_name
+                                changed = True
+                        if changed:
+                            api.update_project(sel_proj_id, {"tasks": tasks})
+
+                    st.success(f"✅ Logged {hours}h on {sel_proj}" +
+                               (f" → {task_name}" if task_name else ""))
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -426,8 +482,10 @@ def page_my_logs(user):
 
     sorted_logs = sorted(filtered, key=lambda x: x.get("date", ""), reverse=True)
     for l in sorted_logs:
+        task_str = f" · {l.get('task_name')}" if l.get("task_name") else ""
         log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
-                     f"{pm.get(l.get('project_id'), '?')} · {float(l.get('hours', 0)):.1f}h")
+                     f"{pm.get(l.get('project_id'), '?')}{task_str} · "
+                     f"{float(l.get('hours', 0)):.1f}h")
         with st.expander(log_label):
             st.markdown(f"**Comments:** {l.get('comments', '—')}")
             if st.button("🗑️ Delete this log", key=f"dlog_{l['id']}"):

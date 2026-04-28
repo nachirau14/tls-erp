@@ -136,10 +136,12 @@ def list_time_logs(employee_id=None, project_id=None):
     return _get("/timelogs", params=params)
 
 
-def create_time_log(employee_id, project_id, hours, date, comments=""):
+def create_time_log(employee_id, project_id, hours, date, comments="",
+                    task_name=""):
     return _post("/timelogs", {
         "employee_id": employee_id, "project_id": project_id,
         "hours": hours, "date": date, "comments": comments,
+        "task_name": task_name,
     })
 
 

@@ -611,13 +611,15 @@ def pg_time():
     em = {e["id"]: e["name"] for e in employees}
     pm = {p["id"]: p["name"] for p in projects}
 
-    f1, f2 = st.columns(2)
+    f1, f2, f3 = st.columns(3)
     with f1:
         se = st.selectbox("Employee",
                           ["All"] + [e["name"] for e in employees])
     with f2:
         sp = st.selectbox("Project",
                           ["All"] + [p["name"] for p in projects])
+    with f3:
+        date_range = st.date_input("Date Range", value=[], key="mgmt_date_filter")
 
     fl = logs
     if se != "All":
@@ -630,6 +632,13 @@ def pg_time():
         if pid:
             fl = [l for l in fl
                   if str(l.get("project_id")) == str(pid)]
+    if date_range:
+        if len(date_range) == 2:
+            sd, ed = date_range
+            fl = [l for l in fl
+                  if sd.isoformat() <= l.get("date", "") <= ed.isoformat()]
+        elif len(date_range) == 1:
+            fl = [l for l in fl if l.get("date", "") == date_range[0].isoformat()]
 
     st.metric("Total Hours",
               f"{sum(float(l.get('hours', 0)) for l in fl):.1f}h")
@@ -638,6 +647,7 @@ def pg_time():
             "Date": l.get("date", ""),
             "Employee": em.get(l.get("employee_id"), "?"),
             "Project": pm.get(l.get("project_id"), "?"),
+            "Task": l.get("task_name", "—") or "—",
             "Hours": float(l.get("hours", 0)),
             "Comments": l.get("comments", ""),
         } for l in fl]).sort_values(

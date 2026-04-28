@@ -383,6 +383,7 @@ def _create_timelog(data):
         "hours": _dec(float(data["hours"])),
         "date": data["date"],
         "comments": data.get("comments", ""),
+        "task_name": data.get("task_name", ""),
         "created_at": _now(),
     })
     return _resp({"message": "Logged", "id": pk})
