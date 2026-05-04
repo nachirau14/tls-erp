@@ -292,27 +292,12 @@ def _update_employee(emp_id, data):
 
 # ─── Projects ───
 
-# Default tasks that pre-populate new projects
-DEFAULT_TASKS = [
-    {"id": "t1", "name": "2D Plans", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t2", "name": "End Views", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t3", "name": "Elevations", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t4", "name": "3D Modeling", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t5", "name": "Rendering", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t6", "name": "Presentation", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t7", "name": "Site", "status": "Not Started", "assigned_to": "", "subtasks": []},
-    {"id": "t8", "name": "Checking", "status": "Not Started", "assigned_to": "", "subtasks": []},
-]
-
 def _create_project(data):
     err = _require(data, ["name"])
     if err:
         return _err(err)
-    # Support both old-style stages and new tasks format
-    import copy
-    tasks = data.get("tasks", copy.deepcopy(DEFAULT_TASKS))
-    # Also keep backward-compatible stages dict
-    stages = {s: "Not Started" for s in PROJECT_STAGES}
+    tasks = data.get("tasks", [])
+    stages = {}
     pk = _uid()
     TABLE_PROJECTS.put_item(Item={
         "pk": pk, "name": data["name"],
@@ -332,13 +317,12 @@ def _list_projects():
     result = []
     for item in items:
         d = {**item, "id": item["pk"]}
-        # Ensure tasks field exists (backward compat with old projects)
         if "tasks" not in d:
             stages = d.get("stages", {})
             d["tasks"] = [
                 {"id": f"t{i+1}", "name": s, "status": stages.get(s, "Not Started"),
                  "assigned_to": "", "subtasks": []}
-                for i, s in enumerate(PROJECT_STAGES)
+                for i, s in enumerate(PROJECT_STAGES) if stages.get(s)
             ]
         result.append(d)
     return _resp(result)

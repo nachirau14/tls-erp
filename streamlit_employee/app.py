@@ -144,19 +144,30 @@ def page_dashboard(user):
 
     st.markdown("### 📁 Active Projects")
     for proj in [p for p in projects if p.get("status") == "active"]:
-        stages = proj.get("stages", {})
-        done = sum(1 for s in stages.values() if s == "Completed")
-        pct = int(done / len(STAGES) * 100)
+        tasks = proj.get("tasks", [])
+        task_count = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+        count_label = f" — {task_count} tasks" if task_count > 0 else ""
         with st.expander(
-            f"**{proj['name']}** — {proj.get('client_name','')} ({pct}%)"
+            f"**{proj['name']}** — {proj.get('client_name', '')}{count_label}"
         ):
-            st.progress(pct / 100)
-            html = ""
-            for sn in STAGES:
-                status = stages.get(sn, "Not Started")
-                css = f"stage-{status.lower().replace(' ', '-')}"
-                html += f'<span class="stage-badge {css}">{sn}: {status}</span> '
-            st.markdown(html, unsafe_allow_html=True)
+            if tasks:
+                for task in tasks:
+                    status = task.get("status", "Not Started")
+                    assigned = task.get("assigned_to", "")
+                    css = f"stage-{status.lower().replace(' ', '-')}"
+                    assign_str = f" → {assigned}" if assigned else ""
+                    st.markdown(
+                        f'<span class="stage-badge {css}">{task.get("name", "")}: '
+                        f'{status}{assign_str}</span>', unsafe_allow_html=True)
+                    for sub in task.get("subtasks", []):
+                        s_status = sub.get("status", "Not Started")
+                        s_css = f"stage-{s_status.lower().replace(' ', '-')}"
+                        s_assign = f" → {sub.get('assigned_to', '')}" if sub.get("assigned_to") else ""
+                        st.markdown(
+                            f'&nbsp;&nbsp;&nbsp;&nbsp;<span class="stage-badge {s_css}">↳ {sub.get("name", "")}: '
+                            f'{s_status}{s_assign}</span>', unsafe_allow_html=True)
+            else:
+                st.caption("No tasks added yet.")
 
 
 def page_projects():
@@ -195,16 +206,17 @@ def page_projects():
 
     for proj in projects:
         tasks = proj.get("tasks", [])
-        total_items = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
-        done_items = (sum(1 for t in tasks if t.get("status") == "Completed") +
-                      sum(1 for t in tasks for st_ in t.get("subtasks", []) if st_.get("status") == "Completed"))
-        pct = int(done_items / total_items * 100) if total_items > 0 else 0
+        task_count = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+        count_label = f" | {task_count} tasks" if task_count > 0 else ""
 
-        with st.expander(f"**{proj['name']}** — {proj.get('client_name', '')} | {pct}%"):
-            st.progress(pct / 100)
+        with st.expander(f"**{proj['name']}** — {proj.get('client_name', '')}{count_label}"):
 
             # ── Task list with subtasks ──
             updated_tasks = []
+
+            if not tasks:
+                st.info("No tasks yet. Add tasks below.")
+
             for tidx, task in enumerate(tasks):
                 st.markdown(f"---")
                 tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
@@ -481,20 +493,35 @@ def page_my_logs(user):
               f"{sum(float(l.get('hours', 0)) for l in filtered):.1f}h")
 
     sorted_logs = sorted(filtered, key=lambda x: x.get("date", ""), reverse=True)
-    for l in sorted_logs:
-        task_str = f" · {l.get('task_name')}" if l.get("task_name") else ""
-        log_label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
+
+    # Table display
+    df = pd.DataFrame([{
+        "Date": l.get("date", ""),
+        "Employee": em.get(l.get("employee_id"), "?"),
+        "Project": pm.get(l.get("project_id"), "?"),
+        "Task": l.get("task_name", "—") or "—",
+        "Hours": float(l.get("hours", 0)),
+        "Comments": l.get("comments", ""),
+    } for l in sorted_logs])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Delete section
+    with st.expander("🗑️ Delete Time Logs"):
+        for l in sorted_logs[:50]:
+            task_str = f" · {l.get('task_name')}" if l.get("task_name") else ""
+            label = (f"{l.get('date', '')} · {em.get(l.get('employee_id'), '?')} · "
                      f"{pm.get(l.get('project_id'), '?')}{task_str} · "
                      f"{float(l.get('hours', 0)):.1f}h")
-        with st.expander(log_label):
-            st.markdown(f"**Comments:** {l.get('comments', '—')}")
-            if st.button("🗑️ Delete this log", key=f"dlog_{l['id']}"):
-                try:
-                    api.delete_time_log(l["id"])
-                    st.success("Deleted!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            col_t, col_d = st.columns([6, 1])
+            with col_t:
+                st.markdown(f"{label}")
+            with col_d:
+                if st.button("🗑️", key=f"dlog_{l['id']}"):
+                    try:
+                        api.delete_time_log(l["id"])
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
 
 def page_leaves(user):

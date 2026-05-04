@@ -150,16 +150,11 @@ def pg_dashboard():
 
     if proj:
         st.markdown("---")
-        st.markdown("#### Project Progress")
+        st.markdown("#### Projects Overview")
         for p in proj:
-            stg = p.get("stages", {})
-            d = sum(1 for s in stg.values() if s == "Completed")
-            pct = int(d / len(STAGES) * 100) if STAGES else 0
-            a, b = st.columns([1, 3])
-            with a:
-                st.markdown(f"**{p['name']}** ({pct}%)")
-            with b:
-                st.progress(pct / 100)
+            tasks = p.get("tasks", [])
+            task_count = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+            st.markdown(f"**{p['name']}** — {p.get('client_name', '')} — {task_count} tasks")
 
 
 # ═══ INVOICING & GST ═══
@@ -496,19 +491,20 @@ def pg_projects():
 
     for proj in projects:
         tasks = proj.get("tasks", [])
-        total_items = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
-        done_items = (sum(1 for t in tasks if t.get("status") == "Completed") +
-                      sum(1 for t in tasks for s in t.get("subtasks", []) if s.get("status") == "Completed"))
-        pct = int(done_items / total_items * 100) if total_items > 0 else 0
+        task_count = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
+        count_label = f" | {task_count} tasks" if task_count > 0 else ""
 
         with st.expander(
             f"**{proj['name']}** — {proj.get('client_name', '')} | "
-            f"{pct}% | {inr(proj.get('total_cost', 0))}"
+            f"{inr(proj.get('total_cost', 0))}{count_label}"
         ):
-            st.progress(pct / 100)
 
             # ── Dynamic tasks with subtasks ──
             updated_tasks = []
+
+            if not tasks:
+                st.info("No tasks yet. Add tasks below.")
+
             for tidx, task in enumerate(tasks):
                 st.markdown("---")
                 tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
