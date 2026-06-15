@@ -29,6 +29,28 @@ CLR_GREY = HexColor("#666666")
 CLR_LIGHT = HexColor("#f5f2ec")
 CLR_LINE = HexColor("#cccccc")
 
+# Max logo width on A4
+LOGO_MAX_WIDTH = 80 * mm
+LOGO_MAX_HEIGHT = 30 * mm
+
+
+def _make_logo_image(logo_bytes):
+    """Create a reportlab Image that preserves the logo's aspect ratio."""
+    from PIL import Image as PILImage
+    pil_stream = io.BytesIO(logo_bytes)
+    pil_img = PILImage.open(pil_stream)
+    orig_w, orig_h = pil_img.size  # pixels
+
+    # Scale to fit within max bounds while preserving aspect ratio
+    ratio = min(LOGO_MAX_WIDTH / orig_w, LOGO_MAX_HEIGHT / orig_h)
+    final_w = orig_w * ratio
+    final_h = orig_h * ratio
+
+    logo_stream = io.BytesIO(logo_bytes)
+    img = Image(logo_stream, width=final_w, height=final_h)
+    img.hAlign = "CENTER"
+    return img
+
 
 def _styles():
     """Build custom paragraph styles."""
@@ -154,13 +176,10 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
     # ── Logo ──
     if logo_bytes:
         try:
-            logo_stream = io.BytesIO(logo_bytes)
-            img = Image(logo_stream, width=60*mm, height=20*mm)
-            img.hAlign = "CENTER"
+            img = _make_logo_image(logo_bytes)
             story.append(img)
             story.append(Spacer(1, 6*mm))
         except Exception:
-            # Fallback to text if logo fails
             company_name = settings.get("account_name", "Studio")
             story.append(Paragraph(company_name, ss["CompanyName"]))
             tag = settings.get("company_tagline", "Architecture | Design")
@@ -332,9 +351,7 @@ def generate_quotation_pdf(quotation, settings, logo_bytes=None):
     # ── Logo ──
     if logo_bytes:
         try:
-            logo_stream = io.BytesIO(logo_bytes)
-            img = Image(logo_stream, width=60*mm, height=20*mm)
-            img.hAlign = "CENTER"
+            img = _make_logo_image(logo_bytes)
             story.append(img)
             story.append(Spacer(1, 6*mm))
         except Exception:
