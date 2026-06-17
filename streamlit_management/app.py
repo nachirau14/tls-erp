@@ -243,28 +243,49 @@ def pg_invoicing():
                  f"{'Tax' if inv.get('invoice_type') == 'tax' else 'Proforma'} | "
                  f"Total: {inr(inv.get('total', 0))}")
         with st.expander(label):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"**Basic:** {inr(inv.get('basic_amount', 0))}")
-                st.markdown(f"**GST:** {inr(inv.get('gst', 0))}")
-                st.markdown(f"**TDS:** {inr(inv.get('tds', 0))}" if inv.get("include_tds", True) else "**TDS:** N/A")
-            with c2:
-                st.markdown(f"**Total:** {inr(inv.get('total', 0))}")
-                st.markdown(f"**Receivable:** {inr(inv.get('receivable', 0))}")
-                st.markdown(f"**Description:** {inv.get('description', '—')}")
+            # ── Edit form ──
+            with st.form(f"edit_inv_{inv['id']}"):
+                ei1, ei2 = st.columns(2)
+                with ei1:
+                    e_inv_num = st.text_input("Invoice Number", value=inv.get("invoice_number", ""), key=f"ein_{inv['id']}")
+                    e_cn = st.text_input("Client Name", value=inv.get("client_name", ""), key=f"ecn_{inv['id']}")
+                    e_desc = st.text_input("Project / Description", value=inv.get("description", ""), key=f"edsc_{inv['id']}")
+                    e_type = st.selectbox("Type", ["tax", "proforma"],
+                        index=["tax", "proforma"].index(inv.get("invoice_type", "tax")),
+                        key=f"eit_{inv['id']}")
+                with ei2:
+                    e_amt = st.number_input("Basic Amount (₹)", value=float(inv.get("basic_amount", 0)),
+                        min_value=0.0, step=1000.0, format="%.2f", key=f"eamt_{inv['id']}")
+                    e_dt = st.date_input("Date",
+                        value=datetime.strptime(inv.get("date", date.today().isoformat()), "%Y-%m-%d").date(),
+                        key=f"edt_{inv['id']}")
+                    e_tds = st.checkbox("Include TDS @10%", value=inv.get("include_tds", True), key=f"etds_{inv['id']}")
+                e_cd = st.text_area("Client Details", value=inv.get("client_details", ""), height=60, key=f"ecd_{inv['id']}")
+                e_notes = st.text_area("Custom Details", value=inv.get("custom_notes", ""), height=80, key=f"enotes_{inv['id']}")
 
-            # Client details
-            cd = inv.get("client_details", "")
-            if cd and cd.strip():
-                st.markdown(f"**Client Details:**")
-                st.text(cd)
+                if e_amt > 0:
+                    g = round(e_amt * 0.18, 2)
+                    t = round(e_amt * 0.10, 2) if e_tds else 0
+                    tot = round(e_amt + g, 2)
+                    r = round((e_amt - t) + g, 2)
+                    tds_str = f" | TDS: {inr(t)}" if e_tds else ""
+                    st.info(f"Basic: {inr(e_amt)} + GST: {inr(g)} = Total: {inr(tot)}{tds_str} | Receivable: {inr(r)}")
 
-            # Show custom notes if present
-            notes = inv.get("custom_notes", "")
-            if notes and notes.strip():
-                st.markdown("**Custom Details:**")
-                st.text(notes)
+                if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
+                    try:
+                        api.update_invoice(inv["id"], {
+                            "invoice_number": e_inv_num, "client_name": e_cn,
+                            "description": e_desc, "invoice_type": e_type,
+                            "amount": e_amt, "date": e_dt.isoformat(),
+                            "include_tds": e_tds, "client_details": e_cd,
+                            "custom_notes": e_notes,
+                        })
+                        st.success("Invoice updated!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
+            # ── Action buttons ──
             b1, b2, b3 = st.columns(3)
             with b1:
                 if inv.get("received"):

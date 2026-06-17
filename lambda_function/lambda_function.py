@@ -464,9 +464,45 @@ def _update_invoice(inv_id, data):
         item["received"] = bool(data["received"])
         item["received_date"] = _now()[:10] if data["received"] else ""
     for f in ["client_name", "client_details", "description", "custom_notes",
-              "invoice_type", "invoice_number"]:
+              "invoice_type", "invoice_number", "date"]:
         if f in data:
             item[f] = data[f]
+    if "include_tds" in data:
+        item["include_tds"] = bool(data["include_tds"])
+    # Recalculate amounts if basic_amount changed
+    if "amount" in data:
+        amt = Decimal(str(data["amount"]))
+        gst = (amt * GST_RATE).quantize(Decimal("0.01"))
+        include_tds = data.get("include_tds", item.get("include_tds", True))
+        tds = (amt * TDS_RATE).quantize(Decimal("0.01")) if include_tds else Decimal("0")
+        total = amt + gst
+        receivable = (amt - tds) + gst
+        item["basic_amount"] = amt
+        item["gst"] = gst
+        item["tds"] = tds
+        item["total"] = total
+        item["receivable"] = receivable
+        # Recalculate quarter/fy if date changed
+        date_str = data.get("date", item.get("date", ""))
+        if date_str:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                m = dt.month
+                item["quarter"] = "Q1" if m in (4,5,6) else "Q2" if m in (7,8,9) else "Q3" if m in (10,11,12) else "Q4"
+                item["fy"] = f"FY{dt.year}-{str(dt.year+1)[2:]}" if m >= 4 else f"FY{dt.year-1}-{str(dt.year)[2:]}"
+            except Exception:
+                pass
+    elif "include_tds" in data and "amount" not in data:
+        # TDS toggle changed but amount didn't — recalculate with existing amount
+        amt = item.get("basic_amount", Decimal("0"))
+        if not isinstance(amt, Decimal):
+            amt = Decimal(str(amt))
+        gst = (amt * GST_RATE).quantize(Decimal("0.01"))
+        tds = (amt * TDS_RATE).quantize(Decimal("0.01")) if item.get("include_tds", True) else Decimal("0")
+        item["gst"] = gst
+        item["tds"] = tds
+        item["total"] = amt + gst
+        item["receivable"] = (amt - tds) + gst
     TABLE_INVOICES.put_item(Item=item)
     return _resp({"message": "Updated"})
 
