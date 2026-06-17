@@ -161,11 +161,14 @@ def list_invoices(quarter=None, fy=None):
 
 
 def create_invoice(client_name, amount, date, description="",
-                   invoice_type="tax", project_id="", custom_notes=""):
+                   invoice_type="tax", project_id="", custom_notes="",
+                   invoice_number="", client_details="", include_tds=True):
     return _post("/invoices", {
         "client_name": client_name, "amount": amount, "date": date,
         "description": description, "invoice_type": invoice_type,
         "project_id": project_id, "custom_notes": custom_notes,
+        "invoice_number": invoice_number, "client_details": client_details,
+        "include_tds": include_tds,
     })
 
 
@@ -211,6 +214,16 @@ def get_logo_url():
 
 def upload_logo(base64_data, content_type="image/png"):
     return _post("/logo", {"base64": base64_data, "content_type": content_type})
+
+
+# ─── Signature ───
+
+def get_signature_url():
+    return _get("/signature")
+
+
+def upload_signature(base64_data, content_type="image/png"):
+    return _post("/signature", {"base64": base64_data, "content_type": content_type})
 
 
 # ─── Bank Details ───

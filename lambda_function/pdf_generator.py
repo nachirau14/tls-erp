@@ -52,6 +52,23 @@ def _make_logo_image(logo_bytes):
     return img
 
 
+def _make_signature_image(sig_bytes):
+    """Create a reportlab Image for signature, preserving aspect ratio."""
+    from PIL import Image as PILImage
+    pil_stream = io.BytesIO(sig_bytes)
+    pil_img = PILImage.open(pil_stream)
+    orig_w, orig_h = pil_img.size
+    max_w = 40 * mm
+    max_h = 18 * mm
+    ratio = min(max_w / orig_w, max_h / orig_h)
+    final_w = orig_w * ratio
+    final_h = orig_h * ratio
+    sig_stream = io.BytesIO(sig_bytes)
+    img = Image(sig_stream, width=final_w, height=final_h)
+    img.hAlign = "LEFT"
+    return img
+
+
 def _styles():
     """Build custom paragraph styles."""
     ss = getSampleStyleSheet()
@@ -163,7 +180,7 @@ def _header_footer(canvas_obj, doc, settings, doc_type, logo_bytes=None):
     canvas_obj.restoreState()
 
 
-def generate_invoice_pdf(invoice, settings, logo_bytes=None):
+def generate_invoice_pdf(invoice, settings, logo_bytes=None, signature_bytes=None):
     """Generate a professional invoice PDF. Returns bytes."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -185,7 +202,6 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
             tag = settings.get("company_tagline", "Architecture | Design")
             story.append(Paragraph(tag, ss["CompanyTag"]))
     else:
-        # No logo uploaded — show company name as text
         company_name = settings.get("account_name", "Studio")
         story.append(Paragraph(company_name, ss["CompanyName"]))
         tag = settings.get("company_tagline", "Architecture | Design")
@@ -206,8 +222,17 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
     except Exception:
         date_formatted = date_str
 
+    # Build client block with details (address, GST etc.)
+    client_block = f"<b>TO:</b><br/><b>{invoice.get('client_name', '')}</b>"
+    client_details = invoice.get("client_details", "")
+    if client_details and client_details.strip():
+        for line in client_details.strip().split("\n"):
+            line = line.strip()
+            if line:
+                client_block += f"<br/>{line}"
+
     to_data = [[
-        Paragraph(f"<b>TO:</b><br/>{invoice.get('client_name', '')}", ss["Body"]),
+        Paragraph(client_block, ss["Body"]),
         Paragraph(f"<b>DATE</b> {date_formatted}", ss["BodyBoldRight"]),
     ]]
     t = Table(to_data, colWidths=["60%", "40%"])
@@ -221,8 +246,6 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
         ["BILL NO:", inv_num],
         ["PROJECT NAME:", invoice.get("description", "")],
     ]
-    if invoice.get("client_gst"):
-        details.append(["CLIENT GST:", invoice["client_gst"]])
     details.append(["GST NO:", settings.get("gstin", "")])
 
     for label, val in details:
@@ -281,21 +304,24 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
     t = Table(total_row, colWidths=["65%", "35%"])
     story.append(t)
 
-    # TDS note
-    tds_row = [[
-        Paragraph("Less: TDS @10% (deducted by client)", ss["Body"]),
-        Paragraph(f"-{_fmt_inr(tds)}", ss["BodyRight"]),
-    ]]
-    t = Table(tds_row, colWidths=["65%", "35%"])
-    story.append(t)
+    # TDS — only if included
+    tds = float(invoice.get("tds", 0))
+    include_tds = invoice.get("include_tds", True)
+    if include_tds and tds > 0:
+        tds_row = [[
+            Paragraph("Less: TDS @10% (deducted by client)", ss["Body"]),
+            Paragraph(f"-{_fmt_inr(tds)}", ss["BodyRight"]),
+        ]]
+        t = Table(tds_row, colWidths=["65%", "35%"])
+        story.append(t)
 
-    story.append(Spacer(1, 2*mm))
-    recv_row = [[
-        Paragraph("<b>NET RECEIVABLE</b>", ss["BodyBold"]),
-        Paragraph(f"<b>{_fmt_inr(receivable)}</b>", ss["BodyBoldRight"]),
-    ]]
-    t = Table(recv_row, colWidths=["65%", "35%"])
-    story.append(t)
+        story.append(Spacer(1, 2*mm))
+        recv_row = [[
+            Paragraph("<b>NET RECEIVABLE</b>", ss["BodyBold"]),
+            Paragraph(f"<b>{_fmt_inr(receivable)}</b>", ss["BodyBoldRight"]),
+        ]]
+        t = Table(recv_row, colWidths=["65%", "35%"])
+        story.append(t)
 
     # Amount in words
     story.append(Spacer(1, 2*mm))
@@ -305,9 +331,18 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph("Kindly release at the earliest.", ss["Body"]))
     story.append(Paragraph("Thank you,", ss["Body"]))
-    story.append(Spacer(1, 8*mm))
+    story.append(Spacer(1, 6*mm))
 
-    # Signatory
+    # Signature image
+    if signature_bytes:
+        try:
+            sig_img = _make_signature_image(signature_bytes)
+            story.append(sig_img)
+            story.append(Spacer(1, 2*mm))
+        except Exception:
+            pass
+
+    # Signatory text
     story.append(Paragraph("<b>Authorized Signatory</b>", ss["Body"]))
     if settings.get("signatory_name"):
         story.append(Paragraph(f"<b>{settings['signatory_name']}</b>", ss["BodyBold"]))
@@ -338,7 +373,7 @@ def generate_invoice_pdf(invoice, settings, logo_bytes=None):
     return buf.getvalue()
 
 
-def generate_quotation_pdf(quotation, settings, logo_bytes=None):
+def generate_quotation_pdf(quotation, settings, logo_bytes=None, signature_bytes=None):
     """Generate a professional quotation PDF. Returns bytes."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -436,7 +471,17 @@ def generate_quotation_pdf(quotation, settings, logo_bytes=None):
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph("We look forward to working with you.", ss["Body"]))
     story.append(Paragraph("Thank you,", ss["Body"]))
-    story.append(Spacer(1, 8*mm))
+    story.append(Spacer(1, 6*mm))
+
+    # Signature image
+    if signature_bytes:
+        try:
+            sig_img = _make_signature_image(signature_bytes)
+            story.append(sig_img)
+            story.append(Spacer(1, 2*mm))
+        except Exception:
+            pass
+
     story.append(Paragraph("<b>Authorized Signatory</b>", ss["Body"]))
     if settings.get("signatory_name"):
         story.append(Paragraph(f"<b>{settings['signatory_name']}</b>", ss["BodyBold"]))

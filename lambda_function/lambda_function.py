@@ -407,11 +407,17 @@ def _create_invoice(data):
 
     amt = Decimal(str(data["amount"]))
     gst = (amt * GST_RATE).quantize(Decimal("0.01"))
-    tds = (amt * TDS_RATE).quantize(Decimal("0.01"))
+    include_tds = data.get("include_tds", True)
+    tds = (amt * TDS_RATE).quantize(Decimal("0.01")) if include_tds else Decimal("0")
     total = amt + gst
     receivable = (amt - tds) + gst
 
-    inv_num = _get_next_number("INV")
+    # Use custom invoice number or auto-generate
+    inv_number = data.get("invoice_number", "").strip()
+    if not inv_number:
+        inv_num = _get_next_number("INV")
+        inv_number = f"INV-{str(inv_num).zfill(4)}"
+
     dt = datetime.strptime(data["date"], "%Y-%m-%d")
     m = dt.month
 
@@ -421,12 +427,14 @@ def _create_invoice(data):
     pk = _uid()
     TABLE_INVOICES.put_item(Item={
         "pk": pk,
-        "invoice_number": f"INV-{str(inv_num).zfill(4)}",
+        "invoice_number": inv_number,
         "client_name": data["client_name"],
+        "client_details": data.get("client_details", ""),
         "description": data.get("description", ""),
         "custom_notes": data.get("custom_notes", ""),
         "invoice_type": data.get("invoice_type", "tax"),
         "date": data["date"],
+        "include_tds": include_tds,
         "basic_amount": amt, "gst": gst, "tds": tds,
         "total": total, "receivable": receivable,
         "received": False, "received_date": "",
@@ -435,7 +443,7 @@ def _create_invoice(data):
         "created_at": _now(),
     })
     return _resp({"message": "Invoice created", "id": pk,
-                  "invoice_number": f"INV-{str(inv_num).zfill(4)}"})
+                  "invoice_number": inv_number})
 
 def _list_invoices(params):
     items = _scan_all(TABLE_INVOICES)
@@ -455,7 +463,8 @@ def _update_invoice(inv_id, data):
     if "received" in data:
         item["received"] = bool(data["received"])
         item["received_date"] = _now()[:10] if data["received"] else ""
-    for f in ["client_name", "description", "custom_notes", "invoice_type"]:
+    for f in ["client_name", "client_details", "description", "custom_notes",
+              "invoice_type", "invoice_number"]:
         if f in data:
             item[f] = data[f]
     TABLE_INVOICES.put_item(Item=item)
@@ -550,9 +559,10 @@ def _generate_invoice_pdf(inv_id):
 
     settings = _get_settings_dict()
     logo = _get_logo_bytes()
+    signature = _get_signature_bytes()
     inv_dict = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
 
-    pdf_bytes = generate_invoice_pdf(inv_dict, settings, logo)
+    pdf_bytes = generate_invoice_pdf(inv_dict, settings, logo, signature)
 
     s3_key = f"invoices/{inv_id}.pdf"
     s3_client.put_object(Bucket=S3_INVOICES, Key=s3_key, Body=pdf_bytes,
@@ -572,9 +582,10 @@ def _generate_quotation_pdf(qtn_id):
 
     settings = _get_settings_dict()
     logo = _get_logo_bytes()
+    signature = _get_signature_bytes()
     qtn_dict = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in item.items()}
 
-    pdf_bytes = generate_quotation_pdf(qtn_dict, settings, logo)
+    pdf_bytes = generate_quotation_pdf(qtn_dict, settings, logo, signature)
 
     s3_key = f"quotations/{qtn_id}.pdf"
     s3_client.put_object(Bucket=S3_QUOTATIONS, Key=s3_key, Body=pdf_bytes,
@@ -608,6 +619,39 @@ def _get_logo_url():
         return _resp({"url": url, "exists": True})
     except Exception:
         return _resp({"url": "", "exists": False})
+
+def _upload_signature(data):
+    """Upload signature image to S3."""
+    if data.get("base64"):
+        import base64
+        sig_bytes = base64.b64decode(data["base64"])
+        s3_client.put_object(Bucket=S3_LOGO, Key="signature/signature.png",
+                             Body=sig_bytes, ContentType=data.get("content_type", "image/png"))
+        return _resp({"message": "Signature uploaded"})
+    else:
+        url = s3_client.generate_presigned_url("put_object",
+            Params={"Bucket": S3_LOGO, "Key": "signature/signature.png",
+                     "ContentType": data.get("content_type", "image/png")},
+            ExpiresIn=3600)
+        return _resp({"upload_url": url})
+
+def _get_signature_url():
+    """Get presigned download URL for signature."""
+    try:
+        s3_client.head_object(Bucket=S3_LOGO, Key="signature/signature.png")
+        url = s3_client.generate_presigned_url("get_object",
+            Params={"Bucket": S3_LOGO, "Key": "signature/signature.png"}, ExpiresIn=3600)
+        return _resp({"url": url, "exists": True})
+    except Exception:
+        return _resp({"url": "", "exists": False})
+
+def _get_signature_bytes():
+    """Fetch signature from S3 if it exists."""
+    try:
+        resp = s3_client.get_object(Bucket=S3_LOGO, Key="signature/signature.png")
+        return resp["Body"].read()
+    except Exception:
+        return None
 
 
 # ─── Leaves ───
@@ -877,6 +921,12 @@ def lambda_handler(event, context):
             return _get_logo_url()
         if path == "/logo" and method == "POST":
             return _upload_logo(_body(event))
+
+        # ── Signature ──
+        if path == "/signature" and method == "GET":
+            return _get_signature_url()
+        if path == "/signature" and method == "POST":
+            return _upload_signature(_body(event))
 
         # ── Bank Details ──
         if path == "/bank-details" and method == "GET":

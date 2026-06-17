@@ -195,23 +195,30 @@ def pg_invoicing():
         with st.form("new_inv"):
             a, b = st.columns(2)
             with a:
+                inv_num = st.text_input("Invoice Number (leave blank to auto-generate)",
+                    placeholder="e.g. 33_0624_D3@MANYATA_03PIN")
                 cn = st.text_input("Client Name *")
-                desc = st.text_input("Description")
+                desc = st.text_input("Project / Description")
                 it = st.selectbox("Type", ["tax", "proforma"])
             with b:
                 amt = st.number_input("Basic Amount (₹) *", min_value=0.0,
                                       step=1000.0, format="%.2f")
                 dt = st.date_input("Date", value=date.today())
+                include_tds = st.checkbox("Include TDS @10%", value=True)
+            client_det = st.text_area("Client Details (address, GST, etc.)",
+                height=80,
+                placeholder="No 672-d, 11th Cross, 7th Block, Jayanagar\nBangalore, Karnataka 560011\nClient GST: 29AAJFF5781G1Z0")
             custom_notes = st.text_area("Custom Details (multi-line)",
                 height=100,
-                placeholder="e.g.\nTOTAL DESIGN FEE: ₹11,00,000/- (Service Tax not included)\nAMOUNT PAID TILL DATE - 60%  ₹6,60,000/-\nFINAL BALANCE AMOUNT TO BE PAID - ₹3,40,000/-")
+                placeholder="e.g.\nTOTAL DESIGN FEE: ₹11,00,000/-\nAMOUNT PAID TILL DATE - 60%  ₹6,60,000/-")
             if amt > 0:
                 g = round(amt * 0.18, 2)
-                t = round(amt * 0.10, 2)
+                t = round(amt * 0.10, 2) if include_tds else 0
                 tot = round(amt + g, 2)
                 r = round((amt - t) + g, 2)
+                tds_str = f" | TDS: {inr(t)}" if include_tds else ""
                 st.info(f"Basic: {inr(amt)} + GST: {inr(g)} = "
-                        f"Total: {inr(tot)} | TDS: {inr(t)} | "
+                        f"Total: {inr(tot)}{tds_str} | "
                         f"Client pays: {inr(r)}")
             if st.form_submit_button("Create Invoice", type="primary",
                                      use_container_width=True):
@@ -219,7 +226,10 @@ def pg_invoicing():
                     try:
                         res = api.create_invoice(cn, amt, dt.isoformat(),
                                                  desc, it,
-                                                 custom_notes=custom_notes)
+                                                 custom_notes=custom_notes,
+                                                 invoice_number=inv_num,
+                                                 client_details=client_det,
+                                                 include_tds=include_tds)
                         st.success(
                             f"Invoice {res.get('invoice_number', '')} created!")
                         st.rerun()
@@ -237,11 +247,17 @@ def pg_invoicing():
             with c1:
                 st.markdown(f"**Basic:** {inr(inv.get('basic_amount', 0))}")
                 st.markdown(f"**GST:** {inr(inv.get('gst', 0))}")
-                st.markdown(f"**TDS:** {inr(inv.get('tds', 0))}")
+                st.markdown(f"**TDS:** {inr(inv.get('tds', 0))}" if inv.get("include_tds", True) else "**TDS:** N/A")
             with c2:
                 st.markdown(f"**Total:** {inr(inv.get('total', 0))}")
                 st.markdown(f"**Receivable:** {inr(inv.get('receivable', 0))}")
                 st.markdown(f"**Description:** {inv.get('description', '—')}")
+
+            # Client details
+            cd = inv.get("client_details", "")
+            if cd and cd.strip():
+                st.markdown(f"**Client Details:**")
+                st.text(cd)
 
             # Show custom notes if present
             notes = inv.get("custom_notes", "")
@@ -1080,6 +1096,33 @@ def pg_settings():
             try:
                 api.upload_logo(b64, ct)
                 st.success("Logo uploaded!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    st.markdown("---")
+
+    # ── Signature Upload ──
+    st.markdown("#### ✍️ Authorized Signatory Signature")
+    st.caption("This signature appears above the 'Authorized Signatory' line on generated PDFs.")
+    try:
+        sig_info = api.get_signature_url()
+        if sig_info.get("exists"):
+            st.image(sig_info["url"], width=150)
+            st.caption("Current signature uploaded.")
+    except Exception:
+        pass
+
+    sig_file = st.file_uploader("Upload Signature (PNG or JPG, transparent background recommended)",
+                                type=["png", "jpg", "jpeg"], key="sig_upload")
+    if sig_file:
+        if st.button("Upload Signature", type="primary"):
+            import base64
+            b64 = base64.b64encode(sig_file.read()).decode()
+            ct = "image/png" if sig_file.name.endswith(".png") else "image/jpeg"
+            try:
+                api.upload_signature(b64, ct)
+                st.success("Signature uploaded!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
