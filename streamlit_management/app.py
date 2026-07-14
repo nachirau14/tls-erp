@@ -538,82 +538,149 @@ def pg_projects():
 
             # ── Dynamic tasks with subtasks ──
             updated_tasks = []
+            fail_duplicates = []  # Tasks to auto-create on review fail
 
             if not tasks:
                 st.info("No tasks yet. Add tasks below.")
 
+            TASK_STATUSES = ["Not Started", "In Progress", "Review", "Completed"]
+            REVIEW_STATUSES = ["Not Started", "In Progress", "Pass", "Fail"]
+
+            def _render_item(item, prefix, idx_str):
+                """Render a single task/subtask row. Returns updated dict or None if removed."""
+                is_sub = prefix.startswith("s")
+                indent = "↳ " if is_sub else ""
+
+                st.markdown(f"{'---' if not is_sub else ''}")
+                rev = item.get("revision", 1)
+                rev_label = f" (Rev {rev})" if rev > 1 else ""
+
+                # Row 1: Description + Revision
+                r1a, r1b = st.columns([5, 1])
+                with r1a:
+                    desc = st.text_input(f"{indent}Description", value=item.get("description", item.get("name", "")),
+                        key=f"md_{prefix}_{idx_str}", label_visibility="collapsed",
+                        placeholder=f"{indent}Task description...")
+                with r1b:
+                    remove = st.checkbox(f"🗑️{rev_label}", key=f"mr_{prefix}_{idx_str}")
+
+                # Row 2: Employee + Status
+                r2a, r2b = st.columns(2)
+                with r2a:
+                    cur_emp = item.get("assigned_to", "Unassigned") or "Unassigned"
+                    assigned = st.selectbox("Employee", emp_names,
+                        index=emp_names.index(cur_emp) if cur_emp in emp_names else 0,
+                        key=f"me_{prefix}_{idx_str}", label_visibility="collapsed")
+                with r2b:
+                    cur_status = item.get("status", "Not Started")
+                    status = st.selectbox("Status", TASK_STATUSES,
+                        index=TASK_STATUSES.index(cur_status) if cur_status in TASK_STATUSES else 0,
+                        key=f"ms_{prefix}_{idx_str}", label_visibility="collapsed")
+
+                # Row 3: Review fields (only if status = Review)
+                reviewer = item.get("reviewer", "")
+                review_status = item.get("review_status", "Not Started")
+                if status == "Review":
+                    r3a, r3b = st.columns(2)
+                    with r3a:
+                        cur_rev = reviewer or "Unassigned"
+                        reviewer = st.selectbox("Reviewer", emp_names,
+                            index=emp_names.index(cur_rev) if cur_rev in emp_names else 0,
+                            key=f"mrev_{prefix}_{idx_str}", label_visibility="collapsed")
+                        if reviewer == "Unassigned":
+                            reviewer = ""
+                    with r3b:
+                        review_status = st.selectbox("Review Status", REVIEW_STATUSES,
+                            index=REVIEW_STATUSES.index(review_status) if review_status in REVIEW_STATUSES else 0,
+                            key=f"mrs_{prefix}_{idx_str}", label_visibility="collapsed")
+                else:
+                    reviewer = ""
+                    review_status = "Not Started"
+
+                if remove:
+                    return None, None
+
+                result = {
+                    "id": item.get("id", f"{prefix}_{idx_str}"),
+                    "description": desc,
+                    "name": desc,  # backward compat
+                    "revision": rev,
+                    "assigned_to": "" if assigned == "Unassigned" else assigned,
+                    "status": status,
+                    "reviewer": reviewer,
+                    "review_status": review_status,
+                    "subtasks": item.get("subtasks", []),
+                }
+
+                # If review failed, create duplicate for next revision
+                dup = None
+                if status == "Review" and review_status == "Fail":
+                    # Mark this one as completed-failed
+                    result["status"] = "Review"
+                    result["review_status"] = "Fail"
+                    dup = {
+                        "id": f"{prefix}_{_uid_short()}",
+                        "description": desc,
+                        "name": desc,
+                        "revision": rev + 1,
+                        "assigned_to": result["assigned_to"],
+                        "status": "Not Started",
+                        "reviewer": "",
+                        "review_status": "Not Started",
+                        "subtasks": [],
+                    }
+
+                return result, dup
+
             for tidx, task in enumerate(tasks):
-                st.markdown("---")
-                tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
-                with tc1:
-                    t_name = st.text_input("Task", value=task.get("name", ""),
-                        key=f"mtn_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc2:
-                    t_status = st.selectbox("Status", STATUSES,
-                        index=STATUSES.index(task.get("status", "Not Started"))
-                              if task.get("status") in STATUSES else 0,
-                        key=f"mts_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc3:
-                    cur_a = task.get("assigned_to", "Unassigned") or "Unassigned"
-                    t_assigned = st.selectbox("Assign", emp_names,
-                        index=emp_names.index(cur_a) if cur_a in emp_names else 0,
-                        key=f"mta_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc4:
-                    t_remove = st.checkbox("🗑️", key=f"mtr_{proj['id']}_{tidx}")
+                result, dup = _render_item(task, "mt", f"{proj['id']}_{tidx}")
 
-                # Subtasks
-                updated_subtasks = []
-                for sidx, sub in enumerate(task.get("subtasks", [])):
-                    sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
-                    with sc1:
-                        s_name = st.text_input("↳ Sub", value=sub.get("name", ""),
-                            key=f"msn_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc2:
-                        s_status = st.selectbox("St", STATUSES,
-                            index=STATUSES.index(sub.get("status", "Not Started"))
-                                  if sub.get("status") in STATUSES else 0,
-                            key=f"mss_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc3:
-                        s_cur = sub.get("assigned_to", "Unassigned") or "Unassigned"
-                        s_assigned = st.selectbox("As", emp_names,
-                            index=emp_names.index(s_cur) if s_cur in emp_names else 0,
-                            key=f"msa_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc4:
-                        s_remove = st.checkbox("🗑️", key=f"msr_{proj['id']}_{tidx}_{sidx}")
+                if result is not None:
+                    # Process subtasks
+                    updated_subtasks = []
+                    sub_dups = []
+                    for sidx, sub in enumerate(task.get("subtasks", [])):
+                        s_result, s_dup = _render_item(sub, "ms", f"{proj['id']}_{tidx}_{sidx}")
+                        if s_result is not None:
+                            s_result.pop("subtasks", None)
+                            updated_subtasks.append(s_result)
+                        if s_dup:
+                            s_dup.pop("subtasks", None)
+                            sub_dups.append(s_dup)
 
-                    if not s_remove:
-                        updated_subtasks.append({
-                            "id": sub.get("id", f"s{tidx}_{sidx}"),
-                            "name": s_name, "status": s_status,
-                            "assigned_to": "" if s_assigned == "Unassigned" else s_assigned,
-                        })
+                    updated_subtasks.extend(sub_dups)
+                    result["subtasks"] = updated_subtasks
+                    updated_tasks.append(result)
 
-                if not t_remove:
-                    updated_tasks.append({
-                        "id": task.get("id", f"t{tidx+1}"),
-                        "name": t_name, "status": t_status,
-                        "assigned_to": "" if t_assigned == "Unassigned" else t_assigned,
-                        "subtasks": updated_subtasks,
-                    })
+                if dup:
+                    fail_duplicates.append(dup)
+
+            # Append any fail-duplicated tasks
+            updated_tasks.extend(fail_duplicates)
 
             # Add buttons
             ac1, ac2 = st.columns(2)
             with ac1:
                 if st.button("➕ Add Task", key=f"mat_{proj['id']}"):
-                    updated_tasks.append({"id": f"t_{_uid_short()}", "name": "New Task",
-                        "status": "Not Started", "assigned_to": "", "subtasks": []})
+                    updated_tasks.append({"id": f"t_{_uid_short()}", "description": "New Task",
+                        "name": "New Task", "revision": 1,
+                        "status": "Not Started", "assigned_to": "",
+                        "reviewer": "", "review_status": "Not Started", "subtasks": []})
                     api.update_project(proj["id"], {"tasks": updated_tasks})
                     st.rerun()
             with ac2:
                 if tasks:
                     add_to = st.selectbox("Add subtask to:",
-                        [t.get("name", f"Task {i+1}") for i, t in enumerate(tasks)],
+                        [t.get("description", t.get("name", f"Task {i+1}")) for i, t in enumerate(tasks)],
                         key=f"mast_{proj['id']}")
                     if st.button("➕ Add Subtask", key=f"mas_{proj['id']}"):
-                        ti = next((i for i, t in enumerate(updated_tasks) if t["name"] == add_to), 0)
+                        ti = next((i for i, t in enumerate(updated_tasks)
+                            if t.get("description", t.get("name")) == add_to), 0)
                         updated_tasks[ti]["subtasks"].append({
-                            "id": f"s_{_uid_short()}", "name": "New Subtask",
-                            "status": "Not Started", "assigned_to": ""})
+                            "id": f"s_{_uid_short()}", "description": "New Subtask",
+                            "name": "New Subtask", "revision": 1,
+                            "status": "Not Started", "assigned_to": "",
+                            "reviewer": "", "review_status": "Not Started"})
                         api.update_project(proj["id"], {"tasks": updated_tasks})
                         st.rerun()
 
