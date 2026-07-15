@@ -168,6 +168,21 @@ def page_dashboard(user):
                             f'{s_status}{s_assign}</span>', unsafe_allow_html=True)
             else:
                 st.caption("No tasks added yet.")
+"""
+EMPLOYEE APP PATCH
+==================
+Replace the entire `page_projects()` function in streamlit_employee/app.py
+with the function below.
+
+This version uses:
+  - A project dropdown selector at the top
+  - An editable table (st.data_editor) with columns:
+    Description | Assigned To | Status | Rev | Reviewer | Review Status
+  - Auto-fail duplication: if review_status = Fail, a new task with
+    revision+1 is auto-created on save
+  - Add Task / Add Subtask buttons below the table
+  - Edit project name/client + delete at the bottom
+"""
 
 
 def page_projects():
@@ -177,6 +192,14 @@ def page_projects():
     except Exception as e:
         st.error(f"Error: {e}")
         return
+
+    try:
+        employees = api.list_employees()
+    except Exception:
+        employees = []
+    emp_names = ["Unassigned"] + [e["name"] for e in employees]
+    STATUS_OPTS = ["Not Started", "In Progress", "Review", "Completed"]
+    REVIEW_OPTS = ["Not Started", "In Progress", "Pass", "Fail"]
 
     with st.expander("➕ Create New Project"):
         with st.form("new_proj"):
@@ -198,139 +221,183 @@ def page_projects():
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    try:
-        employees = api.list_employees()
-    except Exception:
-        employees = []
-    emp_names = ["Unassigned"] + [e["name"] for e in employees]
+    if not projects:
+        st.info("No projects yet.")
+        return
 
-    for proj in projects:
-        tasks = proj.get("tasks", [])
-        task_count = len(tasks) + sum(len(t.get("subtasks", [])) for t in tasks)
-        count_label = f" | {task_count} tasks" if task_count > 0 else ""
+    # ── Project selector ──
+    proj_names = {f"{p['name']} — {p.get('client_name', '')}": p["id"] for p in projects}
+    selected_label = st.selectbox("Select Project", list(proj_names.keys()))
+    selected_id = proj_names[selected_label]
+    proj = next(p for p in projects if p["id"] == selected_id)
 
-        with st.expander(f"**{proj['name']}** — {proj.get('client_name', '')}{count_label}"):
+    st.markdown(f"**Client:** {proj.get('client_name', '—')} · "
+                f"**Started:** {proj.get('start_date', '—')}")
 
-            # ── Task list with subtasks ──
-            updated_tasks = []
+    # ── Flatten tasks into table rows ──
+    tasks = proj.get("tasks", [])
+    rows = []
+    for tidx, task in enumerate(tasks):
+        rows.append({
+            "_idx": len(rows), "_task_idx": tidx, "_sub_idx": -1,
+            "_id": task.get("id", f"t{tidx}"),
+            "Description": task.get("description", task.get("name", "")),
+            "Assigned To": task.get("assigned_to", "") or "Unassigned",
+            "Status": task.get("status", "Not Started"),
+            "Rev": int(task.get("revision", 1)),
+            "Reviewer": task.get("reviewer", "") or "Unassigned",
+            "Review Status": task.get("review_status", "Not Started"),
+        })
+        for sidx, sub in enumerate(task.get("subtasks", [])):
+            rows.append({
+                "_idx": len(rows), "_task_idx": tidx, "_sub_idx": sidx,
+                "_id": sub.get("id", f"s{tidx}_{sidx}"),
+                "Description": "  ↳ " + (sub.get("description", sub.get("name", ""))),
+                "Assigned To": sub.get("assigned_to", "") or "Unassigned",
+                "Status": sub.get("status", "Not Started"),
+                "Rev": int(sub.get("revision", 1)),
+                "Reviewer": sub.get("reviewer", "") or "Unassigned",
+                "Review Status": sub.get("review_status", "Not Started"),
+            })
 
-            if not tasks:
-                st.info("No tasks yet. Add tasks below.")
+    if rows:
+        df = pd.DataFrame(rows)
+        display_cols = ["Description", "Assigned To", "Status", "Rev", "Reviewer", "Review Status"]
 
-            for tidx, task in enumerate(tasks):
-                st.markdown(f"---")
-                tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 1])
-                with tc1:
-                    t_name = st.text_input("Task", value=task.get("name", ""),
-                        key=f"tn_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc2:
-                    t_status = st.selectbox("Status", STATUSES,
-                        index=STATUSES.index(task.get("status", "Not Started"))
-                              if task.get("status") in STATUSES else 0,
-                        key=f"ts_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc3:
-                    cur_assigned = task.get("assigned_to", "Unassigned") or "Unassigned"
-                    t_assigned = st.selectbox("Assign", emp_names,
-                        index=emp_names.index(cur_assigned) if cur_assigned in emp_names else 0,
-                        key=f"ta_{proj['id']}_{tidx}", label_visibility="collapsed")
-                with tc4:
-                    t_remove = st.checkbox("🗑️", key=f"tr_{proj['id']}_{tidx}")
+        edited_df = st.data_editor(
+            df[display_cols],
+            column_config={
+                "Description": st.column_config.TextColumn("Description", width="large"),
+                "Assigned To": st.column_config.SelectboxColumn("Assigned To", options=emp_names, width="medium"),
+                "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, width="medium"),
+                "Rev": st.column_config.NumberColumn("Rev", min_value=1, step=1, width="small"),
+                "Reviewer": st.column_config.SelectboxColumn("Reviewer", options=emp_names, width="medium"),
+                "Review Status": st.column_config.SelectboxColumn("Review Status", options=REVIEW_OPTS, width="medium"),
+            },
+            use_container_width=True, hide_index=True, num_rows="dynamic",
+            key=f"emp_task_table_{selected_id}",
+        )
 
-                # Subtasks
-                updated_subtasks = []
-                for sidx, sub in enumerate(task.get("subtasks", [])):
-                    sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
-                    with sc1:
-                        s_name = st.text_input("↳ Subtask", value=sub.get("name", ""),
-                            key=f"sn_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc2:
-                        s_status = st.selectbox("Status", STATUSES,
-                            index=STATUSES.index(sub.get("status", "Not Started"))
-                                  if sub.get("status") in STATUSES else 0,
-                            key=f"ss_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc3:
-                        s_cur = sub.get("assigned_to", "Unassigned") or "Unassigned"
-                        s_assigned = st.selectbox("Assign", emp_names,
-                            index=emp_names.index(s_cur) if s_cur in emp_names else 0,
-                            key=f"sa_{proj['id']}_{tidx}_{sidx}", label_visibility="collapsed")
-                    with sc4:
-                        s_remove = st.checkbox("🗑️", key=f"sr_{proj['id']}_{tidx}_{sidx}")
+        if st.button("💾 Save Tasks", key=f"esave_{selected_id}", type="primary"):
+            new_rows = []
+            for i in range(len(edited_df)):
+                row = edited_df.iloc[i]
+                desc_raw = row["Description"] if isinstance(row["Description"], str) else str(row["Description"])
+                desc_clean = desc_raw.lstrip(" ↳").strip()
+                assigned = row.get("Assigned To", "Unassigned")
+                if assigned == "Unassigned": assigned = ""
+                reviewer = row.get("Reviewer", "Unassigned")
+                if reviewer == "Unassigned": reviewer = ""
+                is_sub = False
+                orig_id = f"t_{_uid_short()}"
+                if i < len(df):
+                    is_sub = df.iloc[i]["_sub_idx"] >= 0
+                    orig_id = df.iloc[i]["_id"]
+                item = {
+                    "id": orig_id, "description": desc_clean, "name": desc_clean,
+                    "revision": int(row.get("Rev", 1)),
+                    "assigned_to": assigned,
+                    "status": row.get("Status", "Not Started"),
+                    "reviewer": reviewer,
+                    "review_status": row.get("Review Status", "Not Started"),
+                }
+                new_rows.append((is_sub, item))
 
-                    if not s_remove:
-                        updated_subtasks.append({
-                            "id": sub.get("id", f"s{tidx}_{sidx}"),
-                            "name": s_name, "status": s_status,
-                            "assigned_to": "" if s_assigned == "Unassigned" else s_assigned,
-                        })
+            result_tasks = []
+            current_task = None
+            for is_sub, item in new_rows:
+                if not is_sub:
+                    if current_task is not None:
+                        result_tasks.append(current_task)
+                    current_task = {**item, "subtasks": []}
+                else:
+                    if current_task is not None:
+                        current_task["subtasks"].append(item)
+                    else:
+                        result_tasks.append({**item, "subtasks": []})
+            if current_task is not None:
+                result_tasks.append(current_task)
 
-                if not t_remove:
-                    updated_tasks.append({
-                        "id": task.get("id", f"t{tidx+1}"),
-                        "name": t_name, "status": t_status,
-                        "assigned_to": "" if t_assigned == "Unassigned" else t_assigned,
-                        "subtasks": updated_subtasks,
+            # Auto-create revision on Fail
+            fail_dups = []
+            for task in result_tasks:
+                if task.get("status") == "Review" and task.get("review_status") == "Fail":
+                    fail_dups.append({
+                        "id": f"t_{_uid_short()}", "description": task["description"],
+                        "name": task["description"], "revision": task.get("revision", 1) + 1,
+                        "assigned_to": task["assigned_to"], "status": "Not Started",
+                        "reviewer": "", "review_status": "Not Started", "subtasks": [],
                     })
+                sub_dups = []
+                for sub in task.get("subtasks", []):
+                    if sub.get("status") == "Review" and sub.get("review_status") == "Fail":
+                        sub_dups.append({
+                            "id": f"s_{_uid_short()}", "description": sub["description"],
+                            "name": sub["description"], "revision": sub.get("revision", 1) + 1,
+                            "assigned_to": sub["assigned_to"], "status": "Not Started",
+                            "reviewer": "", "review_status": "Not Started",
+                        })
+                task["subtasks"] = task.get("subtasks", []) + sub_dups
+            result_tasks.extend(fail_dups)
 
-            # Add task / subtask buttons
-            ac1, ac2 = st.columns(2)
-            with ac1:
-                if st.button("➕ Add Task", key=f"at_{proj['id']}"):
-                    new_id = f"t{len(tasks)+1}_{_uid_short()}"
-                    updated_tasks.append({"id": new_id, "name": "New Task",
-                        "status": "Not Started", "assigned_to": "", "subtasks": []})
-                    try:
-                        api.update_project(proj["id"], {"tasks": updated_tasks})
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-            with ac2:
-                if tasks:
-                    add_sub_to = st.selectbox("Add subtask to:",
-                        [t.get("name", f"Task {i+1}") for i, t in enumerate(tasks)],
-                        key=f"ast_sel_{proj['id']}")
-                    if st.button("➕ Add Subtask", key=f"as_{proj['id']}"):
-                        tidx_target = next((i for i, t in enumerate(updated_tasks)
-                            if t["name"] == add_sub_to), 0)
-                        new_sid = f"s{tidx_target}_{len(updated_tasks[tidx_target]['subtasks'])+1}"
-                        updated_tasks[tidx_target]["subtasks"].append({
-                            "id": new_sid, "name": "New Subtask",
-                            "status": "Not Started", "assigned_to": ""})
-                        try:
-                            api.update_project(proj["id"], {"tasks": updated_tasks})
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
+            try:
+                api.update_project(selected_id, {"tasks": result_tasks})
+                st.success("Tasks saved!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+    else:
+        st.info("No tasks yet. Add one below.")
 
-            st.markdown("---")
-            if st.button("💾 Save All Changes", key=f"sv_{proj['id']}", type="primary"):
+    # ── Add task / subtask ──
+    st.markdown("---")
+    ac1, ac2 = st.columns(2)
+    with ac1:
+        if st.button("➕ Add Task", key=f"eat_{selected_id}"):
+            tasks.append({
+                "id": f"t_{_uid_short()}", "description": "", "name": "",
+                "revision": 1, "status": "Not Started", "assigned_to": "",
+                "reviewer": "", "review_status": "Not Started", "subtasks": [],
+            })
+            api.update_project(selected_id, {"tasks": tasks})
+            st.rerun()
+    with ac2:
+        if tasks:
+            parent_names = [t.get("description", t.get("name", f"Task {i+1}"))
+                           for i, t in enumerate(tasks)]
+            add_to = st.selectbox("Add subtask to:", parent_names, key=f"east_{selected_id}")
+            if st.button("➕ Add Subtask", key=f"eas_{selected_id}"):
+                ti = parent_names.index(add_to)
+                tasks[ti].setdefault("subtasks", []).append({
+                    "id": f"s_{_uid_short()}", "description": "", "name": "",
+                    "revision": 1, "status": "Not Started", "assigned_to": "",
+                    "reviewer": "", "review_status": "Not Started",
+                })
+                api.update_project(selected_id, {"tasks": tasks})
+                st.rerun()
+
+    # ── Edit project details / delete ──
+    st.markdown("---")
+    with st.expander("✏️ Edit Project Details"):
+        with st.form(f"edit_proj_{selected_id}"):
+            new_name = st.text_input("Project Name", value=proj.get("name", ""))
+            new_client = st.text_input("Client Name", value=proj.get("client_name", ""))
+            if st.form_submit_button("Save Details"):
                 try:
-                    api.update_project(proj["id"], {"tasks": updated_tasks})
-                    st.success("Saved!")
+                    api.update_project(selected_id, {"name": new_name, "client_name": new_client})
+                    st.success("Updated!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-            # Edit project details
-            st.markdown("---")
-            with st.form(f"edit_proj_{proj['id']}"):
-                new_name = st.text_input("Project Name", value=proj.get("name", ""), key=f"pn_{proj['id']}")
-                new_client = st.text_input("Client Name", value=proj.get("client_name", ""), key=f"pcl_{proj['id']}")
-                if st.form_submit_button("Save Details"):
-                    try:
-                        api.update_project(proj["id"], {"name": new_name, "client_name": new_client})
-                        st.success("Updated!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-            if st.button("🗑️ Delete Project", key=f"dp_{proj['id']}"):
-                try:
-                    api.delete_project(proj["id"])
-                    st.success("Deleted!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
+    if st.button("🗑️ Delete Project", key=f"edp_{selected_id}"):
+        try:
+            api.delete_project(selected_id)
+            st.success("Deleted!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
+            
 
 def page_log_time(user):
     st.markdown("### ⏱ Log Time")
